@@ -19,6 +19,7 @@ type SliderMetadataProps = {
 type EditableSliderValueLabelProps = {
   ariaLabel: string;
   disabled?: boolean;
+  editAriaLabel?: string;
   layout?: EditableSliderValueLabelLayout;
   maxValueLabel?: string;
   onCommit?: (nextValue: string) => void;
@@ -30,6 +31,7 @@ type EditableSliderValueLabelProps = {
 export function EditableSliderValueLabel({
   ariaLabel,
   disabled = false,
+  editAriaLabel,
   layout = "reference",
   maxValueLabel,
   onCommit,
@@ -99,7 +101,7 @@ export function EditableSliderValueLabel({
         />
       ) : (
         <EditableSliderValueButton
-          ariaLabel={ariaLabel}
+          ariaLabel={editAriaLabel ?? `编辑${ariaLabel}`}
           layout={layout}
           onBeginEditing={() => setEditing(true)}
           textClassName={valueTextClassName}
@@ -229,7 +231,7 @@ function EditableSliderValueButton({
 
   return (
     <button
-      aria-label={`编辑${ariaLabel}`}
+      aria-label={ariaLabel}
       className={`col-start-1 row-start-1 h-full min-w-0 appearance-none cursor-text border-0 bg-transparent p-0 transition-colors ${layout === "content" ? "w-auto justify-self-start" : "w-full"}`}
       onClick={beginEditableActivation}
       onKeyDown={(event) => {

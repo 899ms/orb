@@ -21,7 +21,9 @@ export type PanelSectionProps = Omit<
   children: React.ReactNode;
   className?: string;
   collapsed?: boolean;
+  collapseLabel?: string;
   collapsible?: boolean;
+  expandLabel?: string;
   flush?: boolean;
   onCollapsedChange?: (collapsed: boolean) => void;
   spacing?: "default" | "technical";
@@ -35,7 +37,9 @@ export function PanelSection({
   children,
   className,
   collapsed = false,
+  collapseLabel,
   collapsible = false,
+  expandLabel,
   flush = false,
   onCollapsedChange,
   spacing = "default",
@@ -88,7 +92,9 @@ export function PanelSection({
         <ControlSectionHeader
           action={action}
           collapsed={isSectionCollapsed}
+          collapseLabel={collapseLabel}
           collapsible={collapsible}
+          expandLabel={expandLabel}
           onCollapsedChange={onCollapsedChange}
         >
           <PanelTitle>{title}</PanelTitle>

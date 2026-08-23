@@ -377,20 +377,6 @@ export const stylePresets: Record<StyleName, StylePreset> = {
   },
 };
 
-export const styleLabels: Record<StyleName, string> = {
-  siri: "Siri 波澜",
-  voiceWave: "声纹薄膜",
-  spectrum: "彩色声场",
-  aurora: "极光帷幕",
-  frost: "冰霜流体",
-  plasma: "神经电浆",
-  chrome: "液态铬",
-  opal: "虹彩欧泊",
-  blueDrop: "蓝晶液滴",
-  violetEmber: "紫焰流核",
-  chromaticMetal: "色差液态金属",
-};
-
 export const styleNames: readonly StyleName[] = [
   "siri",
   "voiceWave",

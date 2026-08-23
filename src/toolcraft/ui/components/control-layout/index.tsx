@@ -113,19 +113,25 @@ export function ControlSectionHeader({
   collapsed = false,
   collapsible = false,
   children,
+  collapseLabel,
+  expandLabel,
   onCollapsedChange,
 }: {
   action?: React.ReactNode;
   collapsed?: boolean;
   collapsible?: boolean;
   children: React.ReactNode;
+  collapseLabel?: string;
+  expandLabel?: string;
   onCollapsedChange?: (collapsed: boolean) => void;
 }): React.JSX.Element {
   const titleText = getControlSectionHeaderText(children);
-  const collapseLabel = collapsed
-    ? `展开${titleText}`
-    : `收起${titleText}`;
-  const collapseButtonLabel = `${collapseLabel}分组`;
+  const resolvedCollapseLabel = collapsed
+    ? (expandLabel ?? `展开${titleText}`)
+    : (collapseLabel ?? `收起${titleText}`);
+  const collapseButtonLabel = collapseLabel || expandLabel
+    ? resolvedCollapseLabel
+    : `${resolvedCollapseLabel}分组`;
   const toggleCollapsed = React.useCallback(() => {
     if (!collapsible) {
       return;
@@ -150,7 +156,7 @@ export function ControlSectionHeader({
   return (
     <div
       aria-expanded={collapsible ? !collapsed : undefined}
-      aria-label={collapsible ? collapseLabel : undefined}
+      aria-label={collapsible ? resolvedCollapseLabel : undefined}
       className={cn(
         "flex h-9 min-w-0 items-center justify-between gap-2 px-3",
         collapsible && "cursor-pointer select-none",
@@ -191,7 +197,7 @@ export function ControlSectionHeader({
               >
                 <PrimitiveArrowIcon direction={collapsed ? "down" : "up"} />
               </TooltipTrigger>
-              <TooltipContent side="top">{collapseLabel}</TooltipContent>
+              <TooltipContent side="top">{resolvedCollapseLabel}</TooltipContent>
             </Tooltip>
           ) : null}
         </div>

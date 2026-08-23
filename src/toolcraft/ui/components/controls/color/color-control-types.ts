@@ -1,6 +1,17 @@
 import type { ControlValueChangeHandler } from "../control-types";
 
+export type ColorControlAriaLabels = {
+  colorChannel: string;
+  colorSurface: string;
+  cssColorValue: string;
+  hexColor: string;
+  hexValue: string;
+  hue: string;
+  selectColor: string;
+};
+
 export type ColorControlInput = {
+  ariaLabels?: ColorControlAriaLabels;
   hex?: string;
   name: string;
   onValueChange?: ControlValueChangeHandler<{ hex: string }>;

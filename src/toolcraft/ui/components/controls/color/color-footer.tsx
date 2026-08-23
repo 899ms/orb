@@ -17,6 +17,8 @@ import {
 } from "./style-guide-color-picker-channel-utils";
 
 type ColorFooterProps = {
+  channelLabel: string;
+  cssColorValueLabel: string;
   resolvedHexInputId: string;
   hexInputLabel: string;
   disabled: boolean;
@@ -34,7 +36,7 @@ type ColorFooterProps = {
 };
 
 const COLOR_FORMAT_MODES = [
-  { label: "十六进制", value: "hex" },
+  { label: "HEX", value: "hex" },
   { label: "RGB", value: "rgb" },
   { label: "HSL", value: "hsl" },
   { label: "HSB", value: "hsb" },
@@ -94,7 +96,9 @@ function ColorFormatSelect({
 }
 
 function ColorValueCells({
+  channelLabel,
   channels,
+  cssColorValueLabel,
   disabled,
   mode,
   onColorValueBlur,
@@ -102,7 +106,9 @@ function ColorValueCells({
   onColorValueFocus,
   showOpacity,
 }: {
+  channelLabel: string;
   channels: ColorChannels;
+  cssColorValueLabel: string;
   disabled: boolean;
   mode: ColorFormatMode;
   onColorValueBlur: () => void;
@@ -120,7 +126,7 @@ function ColorValueCells({
         size="sm"
       >
         <InputGroupInput
-          aria-label="CSS 颜色值"
+          aria-label={cssColorValueLabel}
           className="min-w-0 px-2 font-mono text-xs"
           disabled={disabled}
           readOnly
@@ -158,7 +164,7 @@ function ColorValueCells({
 
           return (
             <InputGroupInput
-              aria-label={`${mode.toUpperCase()} 通道 ${index + 1}`}
+              aria-label={`${mode.toUpperCase()} ${channelLabel} ${index + 1}`}
               className={colorValueInputClassName}
               disabled={disabled}
               inputMode="numeric"
@@ -202,6 +208,8 @@ function ColorValueCells({
 }
 
 export function ColorFooter({
+  channelLabel,
+  cssColorValueLabel,
   resolvedHexInputId,
   hexInputLabel,
   disabled,
@@ -257,7 +265,9 @@ export function ColorFooter({
           </InputGroup>
         ) : (
           <ColorValueCells
+            channelLabel={channelLabel}
             channels={channels}
+            cssColorValueLabel={cssColorValueLabel}
             disabled={disabled}
             mode={mode}
             onColorValueBlur={onColorValueBlur}

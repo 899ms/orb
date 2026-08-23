@@ -16,7 +16,7 @@ export function createWebExport(params: OrbParams): string {
   const shaderLiteral = JSON.stringify(orbShaderSource);
 
   return `<!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -29,7 +29,7 @@ export function createWebExport(params: OrbParams): string {
   </style>
 </head>
 <body>
-  <canvas id="orb" aria-label="动态液态玻璃球"></canvas>
+  <canvas id="orb" aria-label="Animated liquid glass orb"></canvas>
   <div id="status" hidden></div>
   <script type="module">
     const shaderSource = ${shaderLiteral};
@@ -51,12 +51,12 @@ export function createWebExport(params: OrbParams): string {
     }
 
     async function start() {
-      if (!navigator.gpu) throw new Error("当前环境不支持 WebGPU");
+      if (!navigator.gpu) throw new Error("WebGPU is not supported in this environment.");
       const adapter = await navigator.gpu.requestAdapter();
-      if (!adapter) throw new Error("未找到可用的 WebGPU 适配器");
+      if (!adapter) throw new Error("No compatible WebGPU adapter was found.");
       device = await adapter.requestDevice();
       const context = canvas.getContext("webgpu");
-      if (!context) throw new Error("无法创建 WebGPU 画布上下文");
+      if (!context) throw new Error("Unable to create a WebGPU canvas context.");
 
       const format = navigator.gpu.getPreferredCanvasFormat();
       context.configure({ device, format, alphaMode: "premultiplied" });
@@ -85,11 +85,11 @@ export function createWebExport(params: OrbParams): string {
       const startedAt = performance.now();
 
       device.lost.then((info) => {
-        stopWithError(new Error(\`WebGPU 设备已断开：\${info.message || info.reason}\`));
+        stopWithError(new Error(\`WebGPU device lost: \${info.message || info.reason}\`));
       });
       device.addEventListener("uncapturederror", (event) => {
         event.preventDefault();
-        stopWithError(new Error(\`WebGPU 渲染错误：\${event.error.message}\`));
+        stopWithError(new Error(\`WebGPU rendering error: \${event.error.message}\`));
       });
 
       function frame(now) {
@@ -248,7 +248,7 @@ private final class LiquidOrbCoordinator {
             view.delegate = renderer
             return view
         } catch {
-            preconditionFailure("Liquid Orb Metal 初始化失败：\\(error)")
+            preconditionFailure("Liquid Orb Metal initialization failed: \\(error)")
         }
     }
 }

@@ -209,6 +209,37 @@ input {
   backdrop-filter: blur(14px) saturate(130%);
 }
 
+.language-control {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 3;
+  width: 84px;
+  padding: 6px;
+  border: 1px solid color-mix(in oklab, var(--border) 24%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--background) 82%, transparent);
+  box-shadow: 0 12px 32px -20px rgb(0 0 0 / 80%);
+  backdrop-filter: blur(14px) saturate(130%);
+}
+
+.language-control [data-control-field-label] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.language-control [data-slot="toggle-group-item"] {
+  min-height: 28px;
+  padding-inline: 7px;
+  font-size: 11px;
+}
+
 .stage-mode-control [data-control-field-label] {
   font-size: 11px;
 }
@@ -642,6 +673,21 @@ input {
 
   .stage-toolbar {
     bottom: 12px;
+  }
+
+  .language-control {
+    top: 12px;
+    left: 12px;
+    width: 68px;
+    padding: 4px;
+  }
+
+  .language-control [data-slot="toggle-group-item"] {
+    padding-inline: 4px;
+  }
+
+  .stage-mode-control {
+    left: calc(50% + 8px);
   }
 
   .code-sheet {

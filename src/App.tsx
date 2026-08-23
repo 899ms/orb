@@ -41,13 +41,22 @@ import spectrumPreviewUrl from "./assets/presets/spectrum.png";
 import violetEmberPreviewUrl from "./assets/presets/violetEmber.png";
 import voiceWavePreviewUrl from "./assets/presets/voiceWave.png";
 import { createSwiftExport, createWebExport } from "./code-export";
+import {
+  colorLabels,
+  localeOptions,
+  numericLabels,
+  styleLabels,
+  uiCopy,
+  type ColorKey,
+  type Locale,
+  type NumericKey,
+} from "./editor-i18n";
 import { createOrbRenderer } from "./orb-renderer";
 import {
   effectDefaults,
   initialParams,
   orbRadiusRange,
   type OrbParams,
-  styleLabels,
   styleNames,
   stylePresets,
   type StyleName,
@@ -77,37 +86,15 @@ const compactPreviewStyles = new Set<StyleName>([
   "chromaticMetal",
 ]);
 
-type NumericKey = {
-  [Key in keyof OrbParams]: OrbParams[Key] extends number ? Key : never;
-}[keyof OrbParams];
-
 type PreviewMode = "orb" | "scene";
 
 const defaultSceneText = "Thinking...";
 const maxSceneTextLength = 20;
 const hashSyncDelayMs = 500;
-const previewModeOptions = [
-  { label: "球体", value: "orb" },
-  { label: "场景", value: "scene" },
-] as const;
-
-type ColorKey =
-  | "colorA"
-  | "colorB"
-  | "colorC"
-  | "colorD"
-  | "highlightColor"
-  | "shellInner"
-  | "shellMid"
-  | "shellEdge"
-  | "sheenColor"
-  | "specColor"
-  | "canvasColor"
-  | "glowColor";
+const localeStorageKey = "liquid-orb-editor-locale";
 
 type NumericSpec = {
   key: NumericKey;
-  label: string;
   min: number;
   max: number;
   step: number;
@@ -135,11 +122,10 @@ const standardShapeStyles = styleNames.filter((style) => style !== "chromaticMet
 const chromaticMetalStyles: readonly StyleName[] = ["chromaticMetal"];
 
 const numericSpecs: readonly NumericSpec[] = [
-  { key: "speed", label: "速度", min: 0, max: 3, step: 0.01 },
-  { key: "radius", label: "半径", ...orbRadiusRange, step: 0.01 },
+  { key: "speed", min: 0, max: 3, step: 0.01 },
+  { key: "radius", ...orbRadiusRange, step: 0.01 },
   {
     key: "contourDeform",
-    label: "轮廓形变",
     min: 0,
     max: 1,
     step: 0.01,
@@ -147,7 +133,6 @@ const numericSpecs: readonly NumericSpec[] = [
   },
   {
     key: "zoom",
-    label: "缩放",
     min: 0.05,
     max: 1,
     step: 0.01,
@@ -155,17 +140,15 @@ const numericSpecs: readonly NumericSpec[] = [
   },
   {
     key: "warp",
-    label: "扭曲",
     min: 0,
     max: 6,
     step: 0.05,
     enabledStyles: standardShapeStyles,
   },
-  { key: "ridgeAmt", label: "脊线", min: 0, max: 1, step: 0.01, enabledStyles: ridgeStyles },
-  { key: "sharp", label: "锐度", min: 0.5, max: 6, step: 0.05, enabledStyles: sharpStyles },
+  { key: "ridgeAmt", min: 0, max: 1, step: 0.01, enabledStyles: ridgeStyles },
+  { key: "sharp", min: 0.5, max: 6, step: 0.05, enabledStyles: sharpStyles },
   {
     key: "bandDensity",
-    label: "重复次数",
     min: 1,
     max: 6,
     step: 0.1,
@@ -173,7 +156,6 @@ const numericSpecs: readonly NumericSpec[] = [
   },
   {
     key: "metalDepth",
-    label: "金属深度",
     min: 0,
     max: 1,
     step: 0.01,
@@ -181,7 +163,6 @@ const numericSpecs: readonly NumericSpec[] = [
   },
   {
     key: "metalRoughness",
-    label: "表面粗糙度",
     min: 0,
     max: 1,
     step: 0.01,
@@ -189,7 +170,6 @@ const numericSpecs: readonly NumericSpec[] = [
   },
   {
     key: "chromaticShift",
-    label: "RGB 分离",
     min: 0,
     max: 1,
     step: 0.01,
@@ -197,7 +177,6 @@ const numericSpecs: readonly NumericSpec[] = [
   },
   {
     key: "metalScale",
-    label: "图案缩放",
     min: 0.2,
     max: 2,
     step: 0.01,
@@ -205,7 +184,6 @@ const numericSpecs: readonly NumericSpec[] = [
   },
   {
     key: "metalStretch",
-    label: "纵横拉伸",
     min: 0,
     max: 1,
     step: 0.01,
@@ -213,7 +191,6 @@ const numericSpecs: readonly NumericSpec[] = [
   },
   {
     key: "metalAngle",
-    label: "流带角度",
     min: -180,
     max: 180,
     step: 1,
@@ -221,7 +198,6 @@ const numericSpecs: readonly NumericSpec[] = [
   },
   {
     key: "metalOffset",
-    label: "图案偏移",
     min: -1,
     max: 1,
     step: 0.01,
@@ -229,7 +205,6 @@ const numericSpecs: readonly NumericSpec[] = [
   },
   {
     key: "metalPhase",
-    label: "循环相位",
     min: 0,
     max: 1,
     step: 0.01,
@@ -237,21 +212,20 @@ const numericSpecs: readonly NumericSpec[] = [
   },
   {
     key: "metalEvolution",
-    label: "演化幅度",
     min: 0,
     max: 2,
     step: 0.02,
     enabledStyles: chromaticMetalStyles,
   },
-  { key: "shade", label: "明暗", min: 0, max: 1.5, step: 0.01 },
-  { key: "exposure", label: "曝光", min: 0.2, max: 3, step: 0.02 },
-  { key: "sheen", label: "边缘高光", min: 0, max: 2, step: 0.02 },
-  { key: "gloss", label: "色散", min: 0, max: 2, step: 0.02 },
-  { key: "glassOpacity", label: "折射强度", min: 0, max: 1, step: 0.01 },
-  { key: "shellMidAlpha", label: "折射宽度", min: 0, max: 1, step: 0.01 },
-  { key: "shellEdgeAlpha", label: "边缘强度", min: 0, max: 1, step: 0.01 },
-  { key: "edgeSoftness", label: "边缘柔化", min: 0.005, max: 0.15, step: 0.005 },
-  { key: "edgeGlow", label: "外发光强度", min: 0, max: 1, step: 0.01 },
+  { key: "shade", min: 0, max: 1.5, step: 0.01 },
+  { key: "exposure", min: 0.2, max: 3, step: 0.02 },
+  { key: "sheen", min: 0, max: 2, step: 0.02 },
+  { key: "gloss", min: 0, max: 2, step: 0.02 },
+  { key: "glassOpacity", min: 0, max: 1, step: 0.01 },
+  { key: "shellMidAlpha", min: 0, max: 1, step: 0.01 },
+  { key: "shellEdgeAlpha", min: 0, max: 1, step: 0.01 },
+  { key: "edgeSoftness", min: 0.005, max: 0.15, step: 0.005 },
+  { key: "edgeGlow", min: 0, max: 1, step: 0.01 },
 ];
 
 const numericSpecByKey = new Map(numericSpecs.map((spec) => [spec.key, spec]));
@@ -270,21 +244,6 @@ const colorKeys: readonly ColorKey[] = [
   "glowColor",
 ];
 
-const colorLabels: Record<ColorKey, string> = {
-  colorA: "颜色 A",
-  colorB: "颜色 B",
-  colorC: "颜色 C",
-  colorD: "颜色 D",
-  highlightColor: "提亮色",
-  shellInner: "折射底色",
-  shellMid: "冷色散",
-  shellEdge: "暖色散",
-  sheenColor: "主高光色",
-  specColor: "辅高光色",
-  canvasColor: "背景颜色",
-  glowColor: "外发光颜色",
-};
-
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -295,6 +254,19 @@ function normalizeColor(value: string): string | null {
 
 function limitSceneText(value: string): string {
   return Array.from(value).slice(0, maxSceneTextLength).join("");
+}
+
+function readInitialLocale(): Locale {
+  try {
+    const storedLocale = window.localStorage.getItem(localeStorageKey);
+    if (storedLocale === "zh" || storedLocale === "en") return storedLocale;
+  } catch (error) {
+    console.warn("Unable to read the saved interface language.", error);
+  }
+
+  return navigator.language.toLowerCase().startsWith("zh")
+    ? "zh"
+    : "en";
 }
 
 function readPreviewModeFromHash(): PreviewMode {
@@ -387,6 +359,7 @@ function useStackedLayout(): boolean {
 }
 
 export function App(): React.JSX.Element {
+  const [locale, setLocale] = React.useState<Locale>(readInitialLocale);
   const [params, setParams] = React.useState<OrbParams>(readParamsFromHash);
   const [renderState, setRenderState] = React.useState<"loading" | "ready" | "error">("loading");
   const [errorMessage, setErrorMessage] = React.useState("");
@@ -405,6 +378,14 @@ export function App(): React.JSX.Element {
   const paramsRef = React.useRef(params);
   const sectionState = useSectionState();
   const stackedLayout = useStackedLayout();
+  const copy = uiCopy[locale];
+  const previewModeOptions = React.useMemo(
+    () => [
+      { label: copy.orbMode, value: "orb" },
+      { label: copy.sceneMode, value: "scene" },
+    ],
+    [copy.orbMode, copy.sceneMode],
+  );
 
   const webCode = React.useMemo(
     () => (codeParams ? createWebExport(codeParams) : ""),
@@ -416,6 +397,16 @@ export function App(): React.JSX.Element {
   );
 
   paramsRef.current = params;
+
+  React.useEffect(() => {
+    document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
+    document.title = uiCopy[locale].documentTitle;
+    try {
+      window.localStorage.setItem(localeStorageKey, locale);
+    } catch (error) {
+      console.warn("Unable to save the interface language.", error);
+    }
+  }, [locale]);
 
   React.useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -544,7 +535,7 @@ export function App(): React.JSX.Element {
 
   function renderSlider(key: NumericKey): React.JSX.Element | null {
     const spec = numericSpecByKey.get(key);
-    if (!spec) throw new Error(`缺少滑杆配置：${key}`);
+    if (!spec) throw new Error(`Missing slider configuration: ${key}`);
     if (spec.enabledStyles && !spec.enabledStyles.includes(params.style)) return null;
 
     return (
@@ -554,10 +545,11 @@ export function App(): React.JSX.Element {
             ? stylePresets.chromaticMetal[key]
             : effectDefaults[key]
         }
+        editValueLabel={copy.editValue(numericLabels[locale][key])}
         key={key}
         max={spec.max}
         min={spec.min}
-        name={spec.label}
+        name={numericLabels[locale][key]}
         onValueChange={(value) => setParam(key, value)}
         showFill
         step={spec.step}
@@ -567,9 +559,20 @@ export function App(): React.JSX.Element {
   }
 
   function colorInput(key: ColorKey) {
+    const name = colorLabels[locale][key];
+
     return {
+      ariaLabels: {
+        colorChannel: copy.colorChannel,
+        colorSurface: copy.colorSurface,
+        cssColorValue: copy.cssColorValue,
+        hexColor: copy.hexColor,
+        hexValue: copy.hexValue(name),
+        hue: copy.hue,
+        selectColor: copy.selectColor(name),
+      },
       hex: params[key],
-      name: colorLabels[key],
+      name,
       onValueChange: ({ hex }: { hex: string }) => setParam(key, hex),
       showLabel: true,
     };
@@ -590,20 +593,20 @@ export function App(): React.JSX.Element {
         data-preset-collapsed={String(!stackedLayout && presetCollapsed)}
         data-properties-collapsed={String(!stackedLayout && propertiesCollapsed)}
       >
-        <aside className="preset-dock" aria-label="效果预设">
+        <aside className="preset-dock" aria-label={copy.presets}>
           <Panel
             className="preset-panel h-full max-h-none w-full rounded-lg"
             collapsed={presetCollapsed}
             collapseDirection="left"
-            collapseLabel="收起预设面板"
+            collapseLabel={copy.collapsePresets}
             collapsible={!stackedLayout}
-            expandLabel="展开预设面板"
+            expandLabel={copy.expandPresets}
             onCollapsedChange={setPresetCollapsed}
-            title="效果预设"
+            title={copy.presets}
           >
             <PanelSection>
               <div className="preset-control">
-                <div className="preset-grid" role="group" aria-label="动态预设">
+                <div className="preset-grid" role="group" aria-label={copy.animatedPresets}>
                   {styleNames.map((style) => (
                     <Button
                       aria-pressed={params.style === style}
@@ -621,7 +624,7 @@ export function App(): React.JSX.Element {
                         }`}
                         src={stylePreviewUrls[style]}
                       />
-                      <span>{styleLabels[style]}</span>
+                      <span title={styleLabels[locale][style]}>{styleLabels[locale][style]}</span>
                     </Button>
                   ))}
                 </div>
@@ -632,15 +635,26 @@ export function App(): React.JSX.Element {
 
         <section
           className="orb-stage"
-          aria-label={previewMode === "scene" ? "实际场景预览" : "液态玻璃球预览"}
+          aria-label={previewMode === "scene" ? copy.scenePreview : copy.orbPreview}
           data-preview-mode={previewMode}
           ref={stageRef}
           style={{ "--preview-scale": previewScale } as React.CSSProperties}
         >
+          <div className="language-control" data-stage-controls>
+            <SegmentedControl
+              ariaLabel={copy.switchLanguage}
+              name={copy.switchLanguage}
+              onValueChange={(value) => {
+                if (value === "zh" || value === "en") setLocale(value);
+              }}
+              options={localeOptions}
+              value={locale}
+            />
+          </div>
           <div className="stage-mode-control" data-stage-controls>
             <SegmentedControl
-              ariaLabel="切换预览模式"
-              name="预览模式"
+              ariaLabel={copy.switchPreviewMode}
+              name={copy.previewMode}
               onValueChange={updatePreviewMode}
               options={previewModeOptions}
               value={previewMode}
@@ -649,10 +663,10 @@ export function App(): React.JSX.Element {
           <div className="preview-surface">
             <div className="orb-visual">
               {renderState === "error" ? (
-                <img className="orb-poster" src={posterUrl} alt="液态玻璃球静态预览" />
+                <img className="orb-poster" src={posterUrl} alt={copy.staticOrbPreview} />
               ) : null}
               <canvas
-                aria-label="动态液态玻璃球"
+                aria-label={copy.animatedOrbPreview}
                 className="orb-canvas"
                 data-ready={renderState === "ready" ? "true" : undefined}
                 ref={canvasRef}
@@ -660,15 +674,20 @@ export function App(): React.JSX.Element {
               {renderState === "loading" ? (
                 <div className="orb-status" role="status" aria-live="polite">
                   <span className="orb-spinner" aria-hidden="true" />
-                  <span className="sr-only">正在加载球体</span>
+                  <span className="sr-only">{copy.loadingOrb}</span>
                 </div>
               ) : null}
               {renderState === "error" ? (
-                <p className="orb-error" title={errorMessage}>WebGPU 不可用，当前显示静态预览</p>
+                <p
+                  className="orb-error"
+                  title={locale === "zh" ? errorMessage : copy.renderErrorTitle}
+                >
+                  {copy.renderFallback}
+                </p>
               ) : null}
             </div>
             {previewMode === "scene" ? (
-              <div className="scene-copy" aria-label={`场景文字：${sceneText}`}>
+              <div className="scene-copy" aria-label={copy.sceneText(sceneText)}>
                 <span className="scene-copy-text">{sceneText || "\u00a0"}</span>
               </div>
             ) : null}
@@ -682,13 +701,13 @@ export function App(): React.JSX.Element {
               variant="outline"
             >
               <CodeIcon data-icon="inline-start" />
-              复制代码
+              {copy.copyCode}
             </Button>
             <Tooltip>
               <TooltipTrigger
                 render={
                   <a
-                    aria-label="在 GitHub 查看源码"
+                    aria-label={copy.viewSource}
                     className={`${buttonVariants({ size: "icon-lg", variant: "outline" })} github-link`}
                     href="https://github.com/LerSent001/orb"
                     rel="noopener noreferrer"
@@ -698,34 +717,36 @@ export function App(): React.JSX.Element {
               >
                 <GithubLogoIcon aria-hidden="true" weight="fill" />
               </TooltipTrigger>
-              <TooltipContent side="top">在 GitHub 查看源码</TooltipContent>
+              <TooltipContent side="top">{copy.viewSource}</TooltipContent>
             </Tooltip>
           </div>
         </section>
 
-        <aside className="panel-dock" aria-label="球体参数">
+        <aside className="panel-dock" aria-label={copy.orbControls}>
           <Panel
             className="orb-editor-panel h-full max-h-none w-full rounded-lg"
             collapsed={propertiesCollapsed}
             collapseDirection="right"
-            collapseLabel="收起参数面板"
+            collapseLabel={copy.collapseControls}
             collapsible={!stackedLayout}
-            expandLabel="展开参数面板"
+            expandLabel={copy.expandControls}
             onCollapsedChange={setPropertiesCollapsed}
             onResetControls={resetAll}
-            resetLabel="重置全部参数"
-            title="球体参数"
+            resetLabel={copy.resetControls}
+            title={copy.orbControls}
           >
             {previewMode === "scene" ? (
               <PanelSection
                 collapsed={sectionState.isCollapsed("scene")}
+                collapseLabel={copy.collapseSection(copy.sceneSection)}
                 collapsible
+                expandLabel={copy.expandSection(copy.sceneSection)}
                 onCollapsedChange={sectionState.onCollapsedChange("scene")}
-                title="场景预览"
+                title={copy.sceneSection}
               >
                 <div className="scene-text-field">
                   <div className="scene-text-label-row">
-                    <ControlFieldLabel htmlFor="scene-text-input">显示文字</ControlFieldLabel>
+                    <ControlFieldLabel htmlFor="scene-text-input">{copy.displayText}</ControlFieldLabel>
                     <span aria-live="polite" className="scene-text-count">
                       {Array.from(sceneText).length}/{maxSceneTextLength}
                     </span>
@@ -736,24 +757,28 @@ export function App(): React.JSX.Element {
                     onChange={(event) => setSceneText(limitSceneText(event.target.value))}
                     value={sceneText}
                   />
-                  <span className="sr-only" id="scene-text-limit">最多 20 个字符</span>
+                  <span className="sr-only" id="scene-text-limit">{copy.sceneTextLimit}</span>
                 </div>
               </PanelSection>
             ) : null}
             <PanelSection
               collapsed={sectionState.isCollapsed("motion")}
+              collapseLabel={copy.collapseSection(copy.motionSection)}
               collapsible
+              expandLabel={copy.expandSection(copy.motionSection)}
               onCollapsedChange={sectionState.onCollapsedChange("motion")}
-              title="动态"
+              title={copy.motionSection}
             >
               {renderSlider("speed")}
             </PanelSection>
 
             <PanelSection
               collapsed={sectionState.isCollapsed("colors")}
+              collapseLabel={copy.collapseSection(copy.colorsSection)}
               collapsible
+              expandLabel={copy.expandSection(copy.colorsSection)}
               onCollapsedChange={sectionState.onCollapsedChange("colors")}
-              title="颜色"
+              title={copy.colorsSection}
             >
               {colorControl(<Color inputs={[colorInput("colorA"), colorInput("colorB")]} />)}
               {colorControl(<Color inputs={[colorInput("colorC"), colorInput("colorD")]} />)}
@@ -764,9 +789,11 @@ export function App(): React.JSX.Element {
 
             <PanelSection
               collapsed={sectionState.isCollapsed("shape")}
+              collapseLabel={copy.collapseSection(copy.shapeSection)}
               collapsible
+              expandLabel={copy.expandSection(copy.shapeSection)}
               onCollapsedChange={sectionState.onCollapsedChange("shape")}
-              title="形状动画"
+              title={copy.shapeSection}
             >
               {renderSlider("radius")}
               {renderSlider("contourDeform")}
@@ -788,14 +815,16 @@ export function App(): React.JSX.Element {
 
             <PanelSection
               collapsed={sectionState.isCollapsed("glass")}
+              collapseLabel={copy.collapseSection(copy.glassSection)}
               collapsible
+              expandLabel={copy.expandSection(copy.glassSection)}
               onCollapsedChange={sectionState.onCollapsedChange("glass")}
-              title="玻璃罩"
+              title={copy.glassSection}
             >
               <div className="glass-switch">
                 <Switch
                   checked={params.glassEnabled}
-                  name="开启玻璃罩"
+                  name={copy.enableGlass}
                   onCheckedChange={(checked) => setParam("glassEnabled", checked)}
                 />
               </div>
@@ -815,9 +844,11 @@ export function App(): React.JSX.Element {
 
             <PanelSection
               collapsed={sectionState.isCollapsed("edge")}
+              collapseLabel={copy.collapseSection(copy.edgeSection)}
               collapsible
+              expandLabel={copy.expandSection(copy.edgeSection)}
               onCollapsedChange={sectionState.onCollapsedChange("edge")}
-              title="边缘与外发光"
+              title={copy.edgeSection}
             >
               {renderSlider("edgeSoftness")}
               {renderSlider("edgeGlow")}
@@ -837,6 +868,7 @@ export function App(): React.JSX.Element {
       >
         <SheetContent
           className="code-sheet"
+          closeLabel={copy.close}
           side="bottom"
         >
           <textarea
@@ -846,7 +878,7 @@ export function App(): React.JSX.Element {
             tabIndex={-1}
           />
           <SheetHeader className="code-sheet-header">
-            <SheetTitle>复制代码</SheetTitle>
+            <SheetTitle>{copy.copyCode}</SheetTitle>
           </SheetHeader>
           <Tabs
             className="code-tabs"
@@ -866,17 +898,17 @@ export function App(): React.JSX.Element {
               <Button onClick={copyCode} type="button" variant="outline">
                 <CopySimpleIcon data-icon="inline-start" />
                 {copiedPlatform === "error"
-                  ? "复制失败"
+                  ? copy.copyFailed
                   : copiedPlatform === codePlatform
-                    ? "已复制"
-                    : "复制代码"}
+                    ? copy.copied
+                    : copy.copyCode}
               </Button>
             </div>
             <TabsContent className="code-tab-content" value="web">
-              <pre className="code-preview" aria-label="Web 代码"><code>{webCode}</code></pre>
+              <pre className="code-preview" aria-label={copy.webCode}><code>{webCode}</code></pre>
             </TabsContent>
             <TabsContent className="code-tab-content" value="swift">
-              <pre className="code-preview" aria-label="SwiftUI 代码"><code>{swiftCode}</code></pre>
+              <pre className="code-preview" aria-label={copy.swiftCode}><code>{swiftCode}</code></pre>
             </TabsContent>
           </Tabs>
         </SheetContent>

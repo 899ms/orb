@@ -48,6 +48,8 @@ export function ColorPickerView(props: ColorPickerViewProps) {
           />
         </div>
         <ColorFooter
+          channelLabel={props.channelLabel}
+          cssColorValueLabel={props.cssColorValueLabel}
           resolvedHexInputId={props.resolvedHexInputId}
           hexInputLabel={props.hexInputLabel}
           disabled={props.disabled}

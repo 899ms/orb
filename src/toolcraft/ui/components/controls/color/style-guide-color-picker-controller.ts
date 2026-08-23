@@ -218,6 +218,8 @@ function useColorValueHandlers(
 
 export function useColorPickerController({
   value,
+  channelLabel = "通道",
+  cssColorValueLabel = "CSS 颜色值",
   disabled = false,
   hexInputId,
   hexInputLabel = "十六进制颜色",
@@ -330,6 +332,8 @@ export function useColorPickerController({
       : null;
 
   return {
+    channelLabel,
+    cssColorValueLabel,
     disabled,
     surfaceLabel,
     hueLabel,

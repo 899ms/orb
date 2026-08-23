@@ -12,8 +12,14 @@ import { useCallback, useRef, useState } from "react";
 type ColorPickerPopoverSize = "default" | "sm";
 
 type ColorPickerPopoverProps = {
+  ariaLabel?: string;
+  colorChannelLabel?: string;
+  colorSurfaceLabel?: string;
+  cssColorValueLabel?: string;
   disabled?: boolean;
   label: string;
+  hexInputLabel?: string;
+  hueLabel?: string;
   pickerValue: string;
   showOpacity?: boolean;
   size?: ColorPickerPopoverSize;
@@ -23,8 +29,14 @@ type ColorPickerPopoverProps = {
 };
 
 export function ColorPickerPopover({
+  ariaLabel,
+  colorChannelLabel,
+  colorSurfaceLabel,
+  cssColorValueLabel,
   disabled = false,
   label,
+  hexInputLabel,
+  hueLabel,
   pickerValue,
   showOpacity = false,
   size = "default",
@@ -62,7 +74,7 @@ export function ColorPickerPopover({
   return (
     <Popover onOpenChange={handleOpenChange} open={open}>
       <PopoverTrigger
-        aria-label={`选择${label}`}
+        aria-label={ariaLabel ?? `选择${label}`}
         className={cn(
           "group/button inline-flex shrink-0 cursor-pointer items-center justify-center rounded-lg border font-medium whitespace-nowrap transition-colors outline-none select-none focus-visible:border-[color:var(--ring)] focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_oklab,var(--ring)_30%,transparent)]",
           "border-[color:color-mix(in_oklab,var(--border)_12%,transparent)] bg-[color:color-mix(in_oklab,var(--input)_5%,transparent)]",
@@ -92,6 +104,11 @@ export function ColorPickerPopover({
         sideOffset={6}
       >
         <StyleGuideColorPicker
+          channelLabel={colorChannelLabel}
+          cssColorValueLabel={cssColorValueLabel}
+          hexInputLabel={hexInputLabel}
+          hueLabel={hueLabel}
+          surfaceLabel={colorSurfaceLabel}
           value={pickerValue}
           disabled={disabled}
           showOpacity={showOpacity}

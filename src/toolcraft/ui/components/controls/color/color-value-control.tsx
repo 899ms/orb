@@ -20,8 +20,10 @@ import {
   type ControlChangeMeta,
   type ControlValueChangeHandler,
 } from "../control-types";
+import type { ColorControlAriaLabels } from "./color-control-types";
 
 type ColorValueControlProps = {
+  ariaLabels?: ColorControlAriaLabels;
   children?: React.ReactNode;
   className?: string;
   color: string;
@@ -37,6 +39,7 @@ const colorValueButtonGroupClassName =
   "w-full has-[[data-slot=button][aria-expanded=true]]:[&>input]:!border-l-[color:color-mix(in_oklab,var(--border)_30%,transparent)] has-[[data-slot=button][data-open]]:[&>input]:!border-l-[color:color-mix(in_oklab,var(--border)_30%,transparent)] has-[[data-slot=button][data-popup-open]]:[&>input]:!border-l-[color:color-mix(in_oklab,var(--border)_30%,transparent)] has-[[data-slot=button][data-state=open]]:[&>input]:!border-l-[color:color-mix(in_oklab,var(--border)_30%,transparent)]";
 
 export function ColorValueControl({
+  ariaLabels,
   children,
   className,
   color,
@@ -113,6 +116,12 @@ export function ColorValueControl({
         className={cn(colorValueButtonGroupClassName, className)}
       >
         <ColorPickerPopover
+          ariaLabel={ariaLabels?.selectColor}
+          colorChannelLabel={ariaLabels?.colorChannel}
+          colorSurfaceLabel={ariaLabels?.colorSurface}
+          cssColorValueLabel={ariaLabels?.cssColorValue}
+          hexInputLabel={ariaLabels?.hexColor}
+          hueLabel={ariaLabels?.hue}
           label={label}
           pickerValue={getNativeColorPickerValue(previewColor)}
           showOpacity={Boolean(children)}
@@ -122,7 +131,7 @@ export function ColorValueControl({
           onCommit={handleDraftBlur}
         />
         <Input
-          aria-label={`${label}十六进制值`}
+          aria-label={ariaLabels?.hexValue ?? `${label}十六进制值`}
           autoComplete="off"
           className="font-mono"
           name={inputName}

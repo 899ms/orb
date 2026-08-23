@@ -27,6 +27,7 @@ export type SliderControlProps = {
   baseValue?: number;
   className?: string;
   disabled?: boolean;
+  editValueLabel?: string;
   markerCount?: number;
   max?: number;
   min?: number;
@@ -44,6 +45,7 @@ export function SliderControl({
   baseValue,
   className,
   disabled = false,
+  editValueLabel,
   markerCount,
   max = 100,
   min = 0,
@@ -107,6 +109,7 @@ export function SliderControl({
           <EditableSliderValueLabel
             ariaLabel={`${name}数值`}
             disabled={disabled}
+            editAriaLabel={editValueLabel}
             maxValueLabel={getNumericValueLabelWidthReference(
               displayValueLabel,
               { max, min },

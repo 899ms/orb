@@ -62,11 +62,13 @@ function SheetOverlay({ className, ...props }: SheetPrimitive.Backdrop.Props) {
 function SheetContent({
   className,
   children,
+  closeLabel = "关闭",
   portalContainer,
   side = "right",
   showCloseButton = true,
   ...props
 }: SheetPrimitive.Popup.Props & {
+  closeLabel?: string;
   portalContainer?: PortalLayerContainer;
   side?: "top" | "right" | "bottom" | "left";
   showCloseButton?: boolean;
@@ -90,7 +92,7 @@ function SheetContent({
             render={<Button variant="ghost" className="absolute top-4 right-4" size="icon-sm" />}
           >
             <XIcon />
-            <span className="sr-only">关闭</span>
+            <span className="sr-only">{closeLabel}</span>
           </SheetPrimitive.Close>
         )}
       </SheetPrimitive.Popup>

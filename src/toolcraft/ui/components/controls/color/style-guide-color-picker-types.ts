@@ -18,6 +18,8 @@ import type {
 
 export type StyleGuideColorPickerProps = {
   value: string;
+  channelLabel?: string;
+  cssColorValueLabel?: string;
   disabled?: boolean;
   hexInputId?: string;
   hexInputLabel?: string;
@@ -37,6 +39,8 @@ export type ColorPickerSliderHandlers = {
 };
 
 export type ColorPickerViewProps = {
+  channelLabel: string;
+  cssColorValueLabel: string;
   disabled: boolean;
   surfaceLabel: string;
   hueLabel: string;

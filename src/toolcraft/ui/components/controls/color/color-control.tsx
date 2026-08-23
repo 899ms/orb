@@ -34,6 +34,7 @@ function isColorControlGroupProps(
 }
 
 function ColorControlField({
+  ariaLabels,
   fullWidth = false,
   hex,
   name,
@@ -60,6 +61,7 @@ function ColorControlField({
       {showLabel ? <ControlFieldLabel>{name}</ControlFieldLabel> : null}
       <div className={cn("min-w-0", fullWidth ? "w-full" : "w-1/2 shrink-0")}>
         <ColorValueControl
+          ariaLabels={ariaLabels}
           color={activeColor}
           label={name}
           onColorChange={updateColor}
