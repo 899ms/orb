@@ -9,6 +9,7 @@ export type StyleName =
   | "opal"
   | "blueDrop"
   | "violetEmber"
+  | "refractiveBlob"
   | "chromaticMetal";
 
 export type OrbParams = {
@@ -341,6 +342,35 @@ export const stylePresets: Record<StyleName, StylePreset> = {
     canvasColor: "#030006",
     glowColor: "#A52EFF",
   },
+  refractiveBlob: {
+    ...basePreset,
+    speed: 0.76,
+    radius: 0.73,
+    contourDeform: 0.16,
+    zoom: 0.46,
+    warp: 3.65,
+    ridgeAmt: 0.58,
+    sharp: 2.7,
+    shade: 0.14,
+    sheen: 0.14,
+    gloss: 0.52,
+    glassOpacity: 0.82,
+    shellMidAlpha: 0.42,
+    shellEdgeAlpha: 0.2,
+    exposure: 1.2,
+    colorA: "#1B102B",
+    colorB: "#7056A8",
+    colorC: "#BFA5F5",
+    colorD: "#F1E8FF",
+    highlightColor: "#FFFFFF",
+    shellInner: "#F6F0FF",
+    shellMid: "#D9C7FF",
+    shellEdge: "#B59AE8",
+    sheenColor: "#FFFFFF",
+    specColor: "#E9DEFF",
+    canvasColor: "#050208",
+    glowColor: "#B18CFF",
+  },
   chromaticMetal: {
     ...basePreset,
     speed: 1.12,
@@ -382,6 +412,7 @@ export const styleNames: readonly StyleName[] = [
   "voiceWave",
   "blueDrop",
   "violetEmber",
+  "refractiveBlob",
   "chromaticMetal",
   "aurora",
   "frost",
@@ -402,6 +433,7 @@ export const styleFlowIndexes: Record<StyleName, number> = {
   frost: 15,
   blueDrop: 20,
   violetEmber: 21,
+  refractiveBlob: 23,
   chromaticMetal: 22,
 };
 

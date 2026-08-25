@@ -37,6 +37,7 @@ export const styleLabels: Record<Locale, Record<StyleName, string>> = {
     opal: "虹彩欧泊",
     blueDrop: "蓝晶液滴",
     violetEmber: "紫焰流核",
+    refractiveBlob: "折射软体",
     chromaticMetal: "色差液态金属",
   },
   en: {
@@ -50,6 +51,7 @@ export const styleLabels: Record<Locale, Record<StyleName, string>> = {
     opal: "Iridescent Opal",
     blueDrop: "Crystal Drop",
     violetEmber: "Violet Ember",
+    refractiveBlob: "Refractive Gel",
     chromaticMetal: "Chromatic Metal",
   },
 };

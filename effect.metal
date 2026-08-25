@@ -437,6 +437,27 @@ metal::float3 glsFinishPresetFluid(
     return metal::clamp(_e53, metal::float3(0.0), metal::float3(1.0));
 }
 
+metal::float3 glsFinishEmissionFluid(
+    metal::float3 colorIn,
+    metal::float2 p,
+    constant Uniforms& u
+) {
+    metal::float3 color = colorIn;
+    if (u.glassEnabled > 0.5) {
+        color = metal::mix(
+            color,
+            u.highlightColor.xyz,
+            u.shade * 0.22
+                * metal::smoothstep(0.15, 1.15, metal::dot(p, metal::float2(-0.32, 0.78)))
+        );
+    }
+    color *= 1.0 - u.shade * 0.34
+        * metal::smoothstep(-0.1, 1.2, metal::dot(p, metal::float2(0.45, -0.62)));
+    color *= 1.0 - u.shade * 0.22
+        * metal::smoothstep(0.72, 1.08, metal::length(p));
+    return metal::clamp(color, metal::float3(0.0), metal::float3(1.0));
+}
+
 metal::float2 glsSiriBand(
     metal::float2 q,
     float drift,
@@ -502,16 +523,24 @@ metal::float3 glsSiriFluid(
     float whiteCore = metal::exp((-(mainDistance) * mainDistance) / 0.0028) * envelope_1;
     metal::float4 _e170 = u.colorD;
     metal::float4 _e174 = u.colorB;
-    metal::float3 atmosphere = metal::mix(_e170.xyz, _e174.xyz, metal::smoothstep(-0.7, 0.7, q_5.y)) * 0.018;
+    float glassFill = u.glassEnabled > 0.5 ? 1.0 : 0.0;
+    metal::float3 atmosphere = metal::mix(
+        _e170.xyz, _e174.xyz, metal::smoothstep(-0.7, 0.7, q_5.y)) * 0.018 * glassFill;
     color_1 = atmosphere + ((spectral * energy) * 1.14);
     metal::float3 _e188 = color_1;
     metal::float4 _e191 = u.highlightColor;
     color_1 = _e188 + ((_e191.xyz * whiteCore) * (0.18 + (0.1 * low)));
+    float emissionMask = metal::mix(
+        metal::smoothstep(0.08, 0.25, energy + whiteCore * 0.12),
+        1.0,
+        glassFill
+    );
+    color_1 *= emissionMask;
     metal::float3 _e200 = color_1;
     metal::float3 _e203 = color_1;
     color_1 = _e200 / (metal::float3(1.0) + (_e203 * 0.18));
     metal::float3 _e208 = color_1;
-    metal::float3 _e209 = glsFinishPresetFluid(_e208, p_5, u);
+    metal::float3 _e209 = glsFinishEmissionFluid(_e208, p_5, u);
     return _e209;
 }
 
@@ -567,7 +596,9 @@ metal::float3 glsSpectrumFluid(
     metal::float4 _e84 = u.colorD;
     metal::float3 spectral_1 = (((_e73.xyz * _e48) + (_e78.xyz * _e49)) + (_e84.xyz * _e50)) / metal::float3(metal::max(total_1, 0.001));
     metal::float4 _e94 = u.colorD;
-    color_2 = (_e94.xyz * 0.025) + (spectral_1 * (1.0 - metal::exp(-(total_1) * 0.86)));
+    float glassFill = u.glassEnabled > 0.5 ? 1.0 : 0.0;
+    color_2 = (_e94.xyz * 0.025 * glassFill)
+            + (spectral_1 * (1.0 - metal::exp(-(total_1) * 0.86)));
     metal::float3 _e107 = color_2;
     metal::float4 _e110 = u.colorA;
     color_2 = _e107 + ((_e110.xyz * support) * 0.58);
@@ -575,7 +606,7 @@ metal::float3 glsSpectrumFluid(
     metal::float3 _e119 = color_2;
     color_2 = _e116 / (metal::float3(1.0) + (_e119 * 0.2));
     metal::float3 _e124 = color_2;
-    metal::float3 _e125 = glsFinishPresetFluid(_e124, p_6, u);
+    metal::float3 _e125 = glsFinishEmissionFluid(_e124, p_6, u);
     return _e125;
 }
 
@@ -1129,6 +1160,54 @@ metal::float3 glsVioletEmberFluid(
     return glsFinishPresetFluid(color, p, u);
 }
 
+metal::float3 glsRefractiveBlobFluid(
+    metal::float2 p,
+    float t,
+    constant Uniforms& u
+) {
+    float radial2 = metal::clamp(metal::dot(p, p), 0.0, 1.0);
+    float depth = metal::sqrt(metal::max(1.0 - radial2, 0.0));
+    float scale = 0.82 + u.zoom * 1.08;
+    float blur = 0.012 + 0.005 * u.zoom;
+    metal::float2 q = glsRotate(p * scale, 0.08 * metal::sin(t * 0.17));
+    metal::float2 driftA = lqFbm(
+        q * 1.16 + metal::float2(t * 0.052, -t * 0.078), blur * 1.16);
+    metal::float2 driftB = lqFbm(
+        glsRotate(q, 1.21) * 1.34 + metal::float2(-t * 0.064, t * 0.041),
+        blur * 1.34);
+    q += metal::float2(driftA.x - 0.5, driftB.x - 0.5)
+       * (0.34 + u.warp * 0.105);
+
+    metal::float2 body = lqFbm(
+        q * 1.42 + metal::float2(driftB.x * 0.82, driftA.x * 0.66),
+        blur * 1.42);
+    float ribbonPhase = q.y * (2.2 + u.warp * 0.11)
+                      + metal::sin(q.x * 1.72 - t * 0.19) * 0.92
+                      + metal::sin((q.x + q.y) * 1.08 + t * 0.13) * 0.46;
+    float ribbon = metal::pow(
+        metal::clamp(1.0 - metal::abs(metal::sin(ribbonPhase)), 0.0, 1.0),
+        0.82 + u.sharp * 0.23);
+    float fold = lqRidgeS(
+        lqFbm(q * 2.05 + metal::float2(2.8, -t * 0.037), blur * 2.05),
+        0.9 + u.sharp * 0.32);
+    float value = metal::clamp(
+        body.x * 0.5 + driftA.x * 0.16
+        + ribbon * (0.2 + u.ridgeAmt * 0.2)
+        + fold * u.ridgeAmt * 0.18, 0.0, 1.0);
+
+    metal::float3 color = lqRamp(
+        value, u.colorA.xyz, u.colorB.xyz, u.colorC.xyz, u.colorD.xyz, u);
+    float caustic = metal::pow(ribbon, 3.1) * (0.24 + 0.28 * u.ridgeAmt)
+                  + metal::pow(fold, 4.2) * 0.08;
+    color = metal::mix(color, u.colorD.xyz, metal::clamp(caustic, 0.0, 0.52));
+    color *= 0.7 + depth * 0.3;
+    float key = metal::pow(metal::max(metal::dot(
+        metal::normalize(metal::float3(p, depth)),
+        metal::normalize(metal::float3(-0.42, 0.58, 0.9))), 0.0), 4.0);
+    color = metal::mix(color, u.highlightColor.xyz, key * 0.055);
+    return glsFinishPresetFluid(color, p, u);
+}
+
 metal::float3 glsPresetFluid(
     metal::float2 p_16,
     int style,
@@ -1175,6 +1254,9 @@ metal::float3 glsPresetFluid(
     }
     if (style == 22) {
         return glsChromaticMetalFluid(p_16, t_13, u);
+    }
+    if (style == 23) {
+        return glsRefractiveBlobFluid(p_16, t_13, u);
     }
     metal::float3 _e27 = glsFrostFluid(p_16, t_13, u);
     return _e27;
@@ -1382,164 +1464,141 @@ metal::float2 glsContourNormal(
     return metal::normalize(radial - (tangent * ((rad_1 * slope_2) / distance_1)));
 }
 
+metal::float2 glsRefractionNormal(
+    metal::float2 base,
+    metal::float2 p,
+    float t,
+    int style
+) {
+    if (style != 23) {
+        return base;
+    }
+    metal::float2 tangent = metal::float2(-base.y, base.x);
+    float a = lqFbm(
+        p * 2.15 + metal::float2(t * 0.061, -t * 0.043), 0.018).x;
+    float b = lqFbm(
+        glsRotate(p, 1.37) * 2.55 + metal::float2(-t * 0.037, t * 0.052),
+        0.021).x;
+    float wave = (a - b) * 0.76
+               + metal::sin(metal::atan2(p.y, p.x) * 3.0 + t * 0.21) * 0.08;
+    return metal::normalize(base + tangent * wave);
+}
+
 metal::float4 orbGlassLiquidAnim(
     metal::float2 uv01_,
     constant Uniforms& u
 ) {
-    int md_1 = -1;
-    bool local = {};
-    metal::float3 fcol_1 = metal::float3(0.0);
-    metal::float3 col_1 = {};
-    metal::float2 _e8 = u.size;
-    metal::float2 fc = metal::float2(uv01_.x, 1.0 - uv01_.y) * _e8;
-    metal::float2 _e14 = u.size;
-    float _e19 = u.size.x;
-    float _e23 = u.size.y;
-    metal::float2 uv_3 = ((2.0 * fc) - _e14) / metal::float2(metal::max(metal::min(_e19, _e23), 1.0));
-    float _e31 = u.radius;
-    float rad_2 = metal::max(_e31, 0.05);
-    float _e36 = u.time;
-    float _e39 = u.speed;
-    float t_19 = _e36 * _e39;
-    float _e43 = u.contourDeform;
-    float _e44 = glsContourScale(uv_3, t_19, _e43, u);
-    float contourRad = rad_2 * _e44;
-    float _e49 = u.edgeSoftness;
-    float _e50 = mfEdgeD(_e49);
-    if (metal::length(uv_3) > (contourRad * (1.01 + _e50))) {
-        float _e61 = u.edgeSoftness;
-        float _e64 = u.edgeGlow;
-        metal::float4 _e67 = u.glowColor;
-        metal::float3 _e69 = mfEdgeGlow(metal::float3(0.0), uv_3, metal::float2(0.0), contourRad, _e61, _e64, _e67.xyz);
-        return metal::float4(metal::clamp(_e69, metal::float3(0.0), metal::float3(1.0)), 1.0);
+    metal::float2 fc = metal::float2(uv01_.x, 1.0 - uv01_.y) * u.size;
+    metal::float2 uv = (2.0 * fc - u.size)
+                     / metal::max(metal::min(u.size.x, u.size.y), 1.0);
+    float rad = metal::max(u.radius, 0.05);
+    float t = u.time * u.speed;
+    int s = naga_f2i32(u.style + 0.5);
+    bool emissionOnly = u.glassEnabled <= 0.5 && (s == 9 || s == 14);
+    float contourRad = rad * glsContourScale(uv, t, u.contourDeform, u);
+
+    if (metal::length(uv) > contourRad * (1.01 + mfEdgeD(u.edgeSoftness))) {
+        metal::float3 halo = mfEdgeGlow(metal::float3(0.0), uv, metal::float2(0.0),
+                                         contourRad, u.edgeSoftness, u.edgeGlow,
+                                         u.glowColor.xyz);
+        halo = metal::clamp(halo, metal::float3(0.0), metal::float3(1.0));
+        float haloAlpha = metal::max(halo.x, metal::max(halo.y, halo.z));
+        return metal::float4(halo, haloAlpha);
     }
-    metal::float2 p_17 = uv_3 / metal::float2(contourRad);
-    float pd = metal::length(p_17);
-    metal::float2 fu_1 = p_17 / metal::float2(GL_FU);
-    float _e85 = u.style;
-    int s_2 = naga_f2i32(_e85 + 0.5);
-    if (s_2 == 1) {
-        md_1 = 1;
-    } else {
-        if (!(s_2 == 3)) {
-            local = s_2 == 8;
-        } else {
-            local = true;
-        }
-        bool _e102 = local;
-        if (_e102) {
-            md_1 = 7;
-        } else {
-            if (s_2 == 5) {
-                md_1 = 6;
-            } else {
-                if (s_2 == 7) {
-                    md_1 = 0;
-                }
-            }
-        }
-    }
+
+    metal::float2 p = uv / contourRad;
+    float pd = metal::length(p);
+    metal::float2 fu = p / GL_FU;
+    int md = -1;
+    if (s == 1) { md = 1; }
+    else if (s == 3 || s == 8) { md = 7; }
+    else if (s == 5) { md = 6; }
+    else if (s == 7) { md = 0; }
+
     float clearFa = 1.0 - metal::smoothstep(GL_CLEAR_EA, GL_CLEAR_EB, pd);
-    float _e117 = u.contourDeform;
-    metal::float2 _e118 = glsContourNormal(uv_3, rad_2, t_19, _e117, u);
+    metal::float2 contourNormal = glsContourNormal(uv, rad, t, u.contourDeform, u);
+    metal::float2 normal = glsRefractionNormal(contourNormal, p, t, s);
     float edgeDepth = metal::max(1.0 - pd, 0.0);
-    float _e125 = u.shellMidAlpha;
-    float refractionWidth = 0.015 + (0.95 * metal::clamp(_e125, 0.0, 1.0));
+    float refractionWidth = 0.015 + 0.95 * metal::clamp(u.shellMidAlpha, 0.0, 1.0);
     float refractionT = edgeDepth / metal::max(refractionWidth, 0.001);
-    float _e136 = glsRefractionProfile(refractionT);
-    float refractionProfile = metal::pow(_e136, 0.68);
-    float _e141 = u.glassOpacity;
-    float refractionAmount = (1.6 * metal::clamp(_e141, 0.0, 1.0)) * refractionProfile;
-    metal::float2 refractedP = p_17 - (_e118 * refractionAmount);
+    float refractionProfile = metal::pow(glsRefractionProfile(refractionT), 0.68);
+    float refractionAmount = 1.6 * metal::clamp(u.glassOpacity, 0.0, 1.0)
+                           * refractionProfile;
+    metal::float2 refractedP = p - normal * refractionAmount;
+    metal::float3 fcol = metal::float3(0.0);
+
     if (clearFa > 0.0) {
-        if (s_2 >= 9) {
-            float _e159 = u.glassEnabled;
-            if (_e159 > 0.5) {
-                float _e164 = u.gloss;
-                float _e172 = u.glassOpacity;
-                float channelSplit = ((0.14 * metal::clamp(_e164, 0.0, 2.0)) * metal::clamp(_e172, 0.0, 1.0)) * refractionProfile;
-                metal::float3 _e180 = glsPresetFluid(refractedP - (_e118 * channelSplit), s_2, t_19, u);
-                metal::float3 _e181 = glsPresetFluid(refractedP, s_2, t_19, u);
-                metal::float3 _e184 = glsPresetFluid(refractedP + (_e118 * channelSplit), s_2, t_19, u);
-                fcol_1 = metal::float3(_e180.x, _e181.y, _e184.z);
+        if (s >= 9) {
+            if (u.glassEnabled > 0.5) {
+                float channelSplit = 0.14 * metal::clamp(u.gloss, 0.0, 2.0)
+                                   * metal::clamp(u.glassOpacity, 0.0, 1.0)
+                                   * refractionProfile;
+                metal::float3 redSample = glsPresetFluid(refractedP - normal * channelSplit, s, t, u);
+                metal::float3 greenSample = glsPresetFluid(refractedP, s, t, u);
+                metal::float3 blueSample = glsPresetFluid(refractedP + normal * channelSplit, s, t, u);
+                fcol = metal::float3(redSample.x, greenSample.y, blueSample.z);
             } else {
-                metal::float3 _e189 = glsPresetFluid(p_17, s_2, t_19, u);
-                fcol_1 = _e189;
+                fcol = glsPresetFluid(p, s, t, u);
             }
         } else {
-            int _e190 = md_1;
-            metal::float3 _e191 = glsFluid(fu_1, _e190, t_19, u);
-            fcol_1 = _e191;
+            fcol = glsFluid(fu, md, t, u);
         }
     }
-    metal::float3 _e192 = fcol_1;
-    float lum = metal::dot(_e192, metal::float3(0.213, 0.715, 0.072));
-    metal::float3 _e199 = fcol_1;
-    metal::float3 clearSat = metal::clamp(metal::float3(lum) + ((_e199 - metal::float3(lum)) * 1.22), metal::float3(0.0), metal::float3(1.0));
-    metal::float4 _e212 = u.canvasColor;
-    metal::float3 _e216 = glsOver(_e212.xyz, clearSat, 0.99 * clearFa);
-    col_1 = _e216;
-    float _e220 = u.glassEnabled;
-    if (_e220 > 0.5) {
-        float _e225 = u.shellEdgeAlpha;
-        float surfaceWidth = 0.026 + (0.055 * metal::clamp(_e225, 0.0, 1.0));
+
+    float lum = metal::dot(fcol, metal::float3(0.213, 0.715, 0.072));
+    metal::float3 clearSat = metal::clamp(
+        metal::float3(lum) + (fcol - metal::float3(lum)) * 1.22,
+        metal::float3(0.0), metal::float3(1.0));
+    metal::float3 col = glsOver(u.canvasColor.xyz, clearSat, 0.99 * clearFa);
+    if (emissionOnly) {
+        float signal = metal::max(clearSat.x, metal::max(clearSat.y, clearSat.z));
+        float emissionCoverage = metal::smoothstep(0.025, 0.16, signal);
+        col = clearSat * emissionCoverage;
+    }
+
+    if (u.glassEnabled > 0.5) {
+        float surfaceWidth = 0.026 + 0.055 * metal::clamp(u.shellEdgeAlpha, 0.0, 1.0);
         float surfaceBand = (1.0 - metal::smoothstep(0.0, surfaceWidth, edgeDepth)) * clearFa;
         float opticalRim = metal::pow(surfaceBand, 1.8);
-        metal::float3 _e240 = col_1;
-        metal::float4 _e243 = u.shellInner;
-        float _e247 = u.glassOpacity;
-        metal::float3 _e251 = glsOver(_e240, _e243.xyz, (opticalRim * _e247) * 0.45);
-        col_1 = _e251;
+        col = glsOver(col, u.shellInner.xyz, opticalRim * u.glassOpacity * 0.45);
+
         metal::float2 coolDirection = metal::normalize(metal::float2(0.84, 0.54));
         metal::float2 warmDirection = metal::normalize(metal::float2(-0.62, -0.78));
-        float _e262 = glsHighlightLobe(_e118, coolDirection, -0.32, 1.8);
-        float _e265 = glsHighlightLobe(_e118, warmDirection, -0.28, 2.0);
-        float _e268 = u.gloss;
-        float _e275 = u.shellEdgeAlpha;
-        float dispersion = (opticalRim * metal::clamp(_e268, 0.0, 2.0)) * (0.8 + (0.8 * _e275));
-        metal::float3 _e281 = col_1;
-        metal::float4 _e284 = u.shellMid;
-        metal::float3 _e287 = glsOver(_e281, _e284.xyz, dispersion * _e262);
-        col_1 = _e287;
-        metal::float3 _e288 = col_1;
-        metal::float4 _e291 = u.shellEdge;
-        metal::float3 _e294 = glsOver(_e288, _e291.xyz, dispersion * _e265);
-        col_1 = _e294;
-        float _e297 = u.shellEdgeAlpha;
-        float edgeShadow = (opticalRim * (0.015 + (0.15 * _e297))) * (0.15 + (0.85 * metal::max(metal::dot(_e118, metal::float2(0.45, -0.89)), 0.0)));
-        metal::float3 _e314 = col_1;
-        col_1 = _e314 * (1.0 - edgeShadow);
+        float coolSplit = glsHighlightLobe(normal, coolDirection, -0.32, 1.8);
+        float warmSplit = glsHighlightLobe(normal, warmDirection, -0.28, 2.0);
+        float dispersion = opticalRim * metal::clamp(u.gloss, 0.0, 2.0)
+                         * (0.8 + 0.8 * u.shellEdgeAlpha);
+        col = glsOver(col, u.shellMid.xyz, dispersion * coolSplit);
+        col = glsOver(col, u.shellEdge.xyz, dispersion * warmSplit);
+
+        float edgeShadow = opticalRim * (0.015 + 0.15 * u.shellEdgeAlpha)
+                         * (0.15 + 0.85 * metal::max(
+                            metal::dot(normal, metal::float2(0.45, -0.89)), 0.0));
+        col *= 1.0 - edgeShadow;
+
         metal::float2 keyDirection = metal::normalize(metal::float2(-0.68, 0.73));
         metal::float2 fillDirection = metal::normalize(metal::float2(0.74, -0.67));
-        float _e328 = glsHighlightLobe(_e118, keyDirection, 0.2, 2.8);
-        float _e332 = u.sheen;
-        float key = ((opticalRim * _e328) * metal::clamp(_e332, 0.0, 2.0)) * 1.4;
-        float _e341 = glsHighlightLobe(_e118, fillDirection, 0.4, 3.6);
-        float _e345 = u.sheen;
-        float fill = ((opticalRim * _e341) * metal::clamp(_e345, 0.0, 2.0)) * 1.0;
-        metal::float3 _e352 = col_1;
-        metal::float4 _e355 = u.sheenColor;
-        metal::float3 _e357 = glsOver(_e352, _e355.xyz, key);
-        col_1 = _e357;
-        metal::float3 _e358 = col_1;
-        metal::float4 _e361 = u.specColor;
-        metal::float3 _e363 = glsOver(_e358, _e361.xyz, fill);
-        col_1 = _e363;
+        float key = opticalRim * glsHighlightLobe(normal, keyDirection, 0.2, 2.8)
+                  * metal::clamp(u.sheen, 0.0, 2.0) * 1.4;
+        float fill = opticalRim * glsHighlightLobe(normal, fillDirection, 0.4, 3.6)
+                   * metal::clamp(u.sheen, 0.0, 2.0) * 1.0;
+        col = glsOver(col, u.sheenColor.xyz, key);
+        col = glsOver(col, u.specColor.xyz, fill);
     }
-    float _e366 = u.edgeSoftness;
-    float _e367 = mfEdgeD(_e366);
-    float _e372 = u.edgeSoftness;
-    float _e373 = mfEdgeD(_e372);
-    float ballA = 1.0 - metal::smoothstep(0.99 - _e367, 1.01 + _e373, pd);
-    metal::float3 _e379 = col_1;
-    float _e382 = u.exposure;
-    col_1 = metal::clamp(_e379 * metal::max(_e382, 0.0), metal::float3(0.0), metal::float3(1.0)) * ballA;
-    metal::float3 _e392 = col_1;
-    float _e397 = u.edgeSoftness;
-    float _e400 = u.edgeGlow;
-    metal::float4 _e403 = u.glowColor;
-    metal::float3 _e405 = mfEdgeGlow(_e392, uv_3, metal::float2(0.0), contourRad, _e397, _e400, _e403.xyz);
-    return metal::float4(metal::clamp(_e405, metal::float3(0.0), metal::float3(1.0)), 1.0);
+
+    float ballA = 1.0 - metal::smoothstep(
+        0.99 - mfEdgeD(u.edgeSoftness),
+        1.01 + mfEdgeD(u.edgeSoftness), pd);
+    col = metal::clamp(col * metal::max(u.exposure, 0.0),
+                       metal::float3(0.0), metal::float3(1.0)) * ballA;
+    metal::float3 edged = mfEdgeGlow(col, uv, metal::float2(0.0), contourRad,
+                                     u.edgeSoftness, u.edgeGlow, u.glowColor.xyz);
+    metal::float3 finalColor = metal::clamp(
+        edged, metal::float3(0.0), metal::float3(1.0));
+    float emissionAlpha = metal::max(finalColor.x, metal::max(finalColor.y, finalColor.z));
+    float sphereAlpha = metal::clamp(metal::max(ballA, emissionAlpha), 0.0, 1.0);
+    float finalAlpha = emissionOnly ? emissionAlpha : sphereAlpha;
+    return metal::float4(finalColor, finalAlpha);
 }
 
 struct vs_mainInput {
@@ -1591,13 +1650,6 @@ fragment fs_mainOutput fs_main(
     float _e47 = u.contourDeform;
     float _e48 = glsContourScale(uv_4, t_20, _e47, u);
     float contourRad_1 = rad_3 * _e48;
-    float pd_1 = metal::length(uv_4) / contourRad_1;
-    float _e54 = u.edgeSoftness;
-    float _e55 = mfEdgeD(_e54);
-    float _e60 = u.edgeSoftness;
-    float _e61 = mfEdgeD(_e60);
-    float ballA_1 = 1.0 - metal::smoothstep(0.99 - _e55, 1.01 + _e61, pd_1);
-    float lum_1 = metal::max(_e2.x, metal::max(_e2.y, _e2.z));
     metal::float2 _e76 = u.size;
     metal::float2 _e80 = u.size;
     metal::float2 q_12 = ((2.0 * fc_1) - _e76) / _e80;
@@ -1605,7 +1657,5 @@ fragment fs_mainOutput fs_main(
     float fitFeather = 2.0 / metal::max(metal::min(u.size.x, u.size.y), 1.0);
     float fitStart = metal::min(metal::mix(contourRad_1, fitEnd, 0.5), fitEnd - fitFeather);
     float fit = 1.0 - metal::smoothstep(fitStart, fitEnd, metal::max(metal::abs(q_12.x), metal::abs(q_12.y)));
-    float _e97 = u.edgeGlow;
-    float alpha = (_e97 > 0.0) ? metal::max(ballA_1, lum_1) : ballA_1;
-    return fs_mainOutput { metal::float4(_e2.xyz * fit, metal::clamp(alpha, 0.0, 1.0) * fit) };
+    return fs_mainOutput { metal::float4(_e2.xyz * fit, _e2.w * fit) };
 }

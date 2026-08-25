@@ -180,11 +180,16 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
         view.preferredFramesPerSecond = 60
         view.enableSetNeedsDisplay = false
         view.isPaused = false
+        #if os(iOS)
+        view.isOpaque = false
+        #elseif os(macOS)
+        view.layer?.isOpaque = false
+        #endif
         view.clearColor = MTLClearColor(
-            red: Double(uniforms[72]),
-            green: Double(uniforms[73]),
-            blue: Double(uniforms[74]),
-            alpha: 1
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: 0
         )
 
         let library = try device.makeLibrary(source: orbMetalSource, options: nil)
@@ -199,7 +204,7 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
         descriptor.fragmentFunction = fragment
         descriptor.colorAttachments[0].pixelFormat = view.colorPixelFormat
         descriptor.colorAttachments[0].isBlendingEnabled = true
-        descriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
+        descriptor.colorAttachments[0].sourceRGBBlendFactor = .one
         descriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
         descriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
         descriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha

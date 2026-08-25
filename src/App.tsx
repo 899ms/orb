@@ -36,6 +36,7 @@ import chromaticMetalPreviewUrl from "./assets/presets/chromaticMetal.png";
 import frostPreviewUrl from "./assets/presets/frost.png";
 import opalPreviewUrl from "./assets/presets/opal.png";
 import plasmaPreviewUrl from "./assets/presets/plasma.png";
+import refractiveBlobPreviewUrl from "./assets/presets/refractiveBlob.png";
 import siriPreviewUrl from "./assets/presets/siri.png";
 import spectrumPreviewUrl from "./assets/presets/spectrum.png";
 import violetEmberPreviewUrl from "./assets/presets/violetEmber.png";
@@ -78,11 +79,13 @@ const stylePreviewUrls: Record<StyleName, string> = {
   opal: opalPreviewUrl,
   blueDrop: blueDropPreviewUrl,
   violetEmber: violetEmberPreviewUrl,
+  refractiveBlob: refractiveBlobPreviewUrl,
   chromaticMetal: chromaticMetalPreviewUrl,
 };
 const compactPreviewStyles = new Set<StyleName>([
   "blueDrop",
   "violetEmber",
+  "refractiveBlob",
   "chromaticMetal",
 ]);
 
@@ -110,6 +113,7 @@ const ridgeStyles: readonly StyleName[] = [
   "plasma",
   "blueDrop",
   "violetEmber",
+  "refractiveBlob",
 ];
 const sharpStyles: readonly StyleName[] = [
   "frost",
@@ -117,8 +121,11 @@ const sharpStyles: readonly StyleName[] = [
   "chrome",
   "blueDrop",
   "violetEmber",
+  "refractiveBlob",
 ];
-const standardShapeStyles = styleNames.filter((style) => style !== "chromaticMetal");
+const standardShapeStyles = styleNames.filter(
+  (style) => style !== "chromaticMetal",
+);
 const chromaticMetalStyles: readonly StyleName[] = ["chromaticMetal"];
 
 const numericSpecs: readonly NumericSpec[] = [
@@ -540,11 +547,7 @@ export function App(): React.JSX.Element {
 
     return (
       <Slider
-        baseValue={
-          params.style === "chromaticMetal"
-            ? stylePresets.chromaticMetal[key]
-            : effectDefaults[key]
-        }
+        baseValue={stylePresets[params.style][key]}
         editValueLabel={copy.editValue(numericLabels[locale][key])}
         key={key}
         max={spec.max}

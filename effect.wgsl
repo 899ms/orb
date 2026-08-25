@@ -406,6 +406,18 @@ fn glsFinishPresetFluid(colorIn: vec3<f32>, p: vec2<f32>) -> vec3<f32> {
   return clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+fn glsFinishEmissionFluid(colorIn: vec3<f32>, p: vec2<f32>) -> vec3<f32> {
+  var color = colorIn;
+  if (u.glassEnabled > 0.5) {
+    color = mix(color, u.highlightColor.rgb,
+                u.shade * 0.22 * smoothstep(0.15, 1.15, dot(p, vec2<f32>(-0.32, 0.78))));
+  }
+  color = color * (1.0 - u.shade * 0.34
+                  * smoothstep(-0.1, 1.2, dot(p, vec2<f32>(0.45, -0.62))));
+  color = color * (1.0 - u.shade * 0.22 * smoothstep(0.72, 1.08, length(p)));
+  return clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 fn glsSiriBand(q: vec2<f32>, drift: f32, phaseOffset: f32, amplitude: f32,
                mainY: f32, envelope: f32, softness: f32) -> vec2<f32> {
   let y = amplitude * envelope * sin(q.x * 1.0 + drift + phaseOffset);
@@ -454,12 +466,16 @@ fn glsSiriFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
   let energy = (1.0 - exp(-total * 0.58)) * envelope;
   let mainDistance = abs(q.y - mainY);
   let whiteCore = exp(-mainDistance * mainDistance / 0.0028) * envelope;
+  let glassFill = select(0.0, 1.0, u.glassEnabled > 0.5);
   let atmosphere = mix(u.colorD.rgb, u.colorB.rgb,
-                       smoothstep(-0.7, 0.7, q.y)) * 0.018;
+                       smoothstep(-0.7, 0.7, q.y)) * 0.018 * glassFill;
   var color = atmosphere + spectral * energy * 1.14;
   color = color + u.highlightColor.rgb * whiteCore * (0.18 + 0.1 * low);
+  let emissionMask = mix(smoothstep(0.08, 0.25, energy + whiteCore * 0.12),
+                         1.0, glassFill);
+  color = color * emissionMask;
   color = color / (vec3<f32>(1.0) + color * 0.18);
-  return glsFinishPresetFluid(color, p);
+  return glsFinishEmissionFluid(color, p);
 }
 
 fn glsSpectrumHeight(q: vec2<f32>, t: f32, frequency: f32,
@@ -496,10 +512,12 @@ fn glsSpectrumFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
   let total = l0 + l1 + l2;
   let spectral = (u.colorB.rgb * l0 + u.colorC.rgb * l1 + u.colorD.rgb * l2)
                  / max(total, 0.001);
-  var color = u.colorD.rgb * 0.025 + spectral * (1.0 - exp(-total * 0.86));
+  let glassFill = select(0.0, 1.0, u.glassEnabled > 0.5);
+  var color = u.colorD.rgb * 0.025 * glassFill
+            + spectral * (1.0 - exp(-total * 0.86));
   color = color + u.colorA.rgb * support * 0.58;
   color = color / (vec3<f32>(1.0) + color * 0.2);
-  return glsFinishPresetFluid(color, p);
+  return glsFinishEmissionFluid(color, p);
 }
 
 fn glsAuroraLayer(p: vec2<f32>, t: f32, offset: f32) -> f32 {
@@ -825,6 +843,45 @@ fn glsVioletEmberFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
   return glsFinishPresetFluid(color, p);
 }
 
+fn glsRefractiveBlobFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
+  // Broad advected cells give the lens something legible to bend. A slower
+  // caustic ribbon crosses those cells out of phase, so the material evolves
+  // without looking like a texture rotating inside a fixed sphere.
+  let radial2 = clamp(dot(p, p), 0.0, 1.0);
+  let depth = sqrt(max(1.0 - radial2, 0.0));
+  let scale = 0.82 + u.zoom * 1.08;
+  let blur = 0.012 + 0.005 * u.zoom;
+  var q = glsRotate(p * scale, 0.08 * sin(t * 0.17));
+  let driftA = lqFbm(q * 1.16 + vec2<f32>(t * 0.052, -t * 0.078), blur * 1.16);
+  let driftB = lqFbm(glsRotate(q, 1.21) * 1.34
+                     + vec2<f32>(-t * 0.064, t * 0.041), blur * 1.34);
+  q = q + vec2<f32>(driftA.x - 0.5, driftB.x - 0.5)
+          * (0.34 + u.warp * 0.105);
+
+  let body = lqFbm(q * 1.42 + vec2<f32>(driftB.x * 0.82, driftA.x * 0.66),
+                   blur * 1.42);
+  let ribbonPhase = q.y * (2.2 + u.warp * 0.11)
+                  + sin(q.x * 1.72 - t * 0.19) * 0.92
+                  + sin((q.x + q.y) * 1.08 + t * 0.13) * 0.46;
+  let ribbon = pow(clamp(1.0 - abs(sin(ribbonPhase)), 0.0, 1.0),
+                   0.82 + u.sharp * 0.23);
+  let fold = lqRidgeS(lqFbm(q * 2.05 + vec2<f32>(2.8, -t * 0.037),
+                            blur * 2.05), 0.9 + u.sharp * 0.32);
+  let value = clamp(body.x * 0.5 + driftA.x * 0.16
+                    + ribbon * (0.2 + u.ridgeAmt * 0.2)
+                    + fold * u.ridgeAmt * 0.18, 0.0, 1.0);
+
+  var color = lqRamp(value, u.colorA.rgb, u.colorB.rgb, u.colorC.rgb, u.colorD.rgb);
+  let caustic = pow(ribbon, 3.1) * (0.24 + 0.28 * u.ridgeAmt)
+               + pow(fold, 4.2) * 0.08;
+  color = mix(color, u.colorD.rgb, clamp(caustic, 0.0, 0.52));
+  color = color * (0.7 + depth * 0.3);
+  let key = pow(max(dot(normalize(vec3<f32>(p, depth)),
+                        normalize(vec3<f32>(-0.42, 0.58, 0.9))), 0.0), 4.0);
+  color = mix(color, u.highlightColor.rgb, key * 0.055);
+  return glsFinishPresetFluid(color, p);
+}
+
 fn glsPresetFluid(p: vec2<f32>, style: i32, t: f32) -> vec3<f32> {
   if (style == 9) { return glsSiriFluid(p, t); }
   if (style == 10) { return glsAuroraFluid(p, t); }
@@ -837,6 +894,7 @@ fn glsPresetFluid(p: vec2<f32>, style: i32, t: f32) -> vec3<f32> {
   if (style == 20) { return glsBlueDropFluid(p, t); }
   if (style == 21) { return glsVioletEmberFluid(p, t); }
   if (style == 22) { return glsChromaticMetalFluid(p, t); }
+  if (style == 23) { return glsRefractiveBlobFluid(p, t); }
   return glsFrostFluid(p, t);
 }
 
@@ -987,6 +1045,17 @@ fn glsContourNormal(uv: vec2<f32>, rad: f32, t: f32, amount: f32) -> vec2<f32> {
   return normalize(radial - tangent * (rad * slope / distance));
 }
 
+fn glsRefractionNormal(base: vec2<f32>, p: vec2<f32>, t: f32,
+                       style: i32) -> vec2<f32> {
+  if (style != 23) { return base; }
+  let tangent = vec2<f32>(-base.y, base.x);
+  let a = lqFbm(p * 2.15 + vec2<f32>(t * 0.061, -t * 0.043), 0.018).x;
+  let b = lqFbm(glsRotate(p, 1.37) * 2.55
+                  + vec2<f32>(-t * 0.037, t * 0.052), 0.021).x;
+  let wave = (a - b) * 0.76 + sin(atan2(p.y, p.x) * 3.0 + t * 0.21) * 0.08;
+  return normalize(base + tangent * wave);
+}
+
 fn orbGlassLiquidAnim(uv01: vec2<f32>) -> vec4<f32> {
   // The runner hands uv01 with y down from the top, like stitchable MSL's
   // `position`; the orb was authored bottom-left, so flip back.
@@ -995,6 +1064,8 @@ fn orbGlassLiquidAnim(uv01: vec2<f32>) -> vec4<f32> {
 
   let rad = max(u.radius, 0.05);
   let t = u.time * u.speed;
+  let s = i32(u.style + 0.5);
+  let emissionOnly = u.glassEnabled <= 0.5 && (s == 9 || s == 14);
   let contourRad = rad * glsContourScale(uv, t, u.contourDeform);
 
   // Nothing on this pixel — and here that is the whole fluid and the whole
@@ -1018,9 +1089,11 @@ fn orbGlassLiquidAnim(uv01: vec2<f32>) -> vec4<f32> {
   if (length(uv) > contourRad * (1.01 + mfEdgeD(u.edgeSoftness))) {
     // Off the ball entirely — but the halo lives out here, so hand back
     // what the edge bank paints on nothing. Exactly black at Glow 0.
-    return vec4<f32>(clamp(mfEdgeGlow(vec3<f32>(0.0), uv, vec2<f32>(0.0), contourRad,
-                                      u.edgeSoftness, u.edgeGlow, u.glowColor.rgb),
-                           vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    let halo = clamp(mfEdgeGlow(vec3<f32>(0.0), uv, vec2<f32>(0.0), contourRad,
+                                u.edgeSoftness, u.edgeGlow, u.glowColor.rgb),
+                     vec3<f32>(0.0), vec3<f32>(1.0));
+    let haloAlpha = max(halo.r, max(halo.g, halo.b));
+    return vec4<f32>(halo, haloAlpha);
   }
 
   let p   = uv / contourRad;     // deformed ball space: |p| == 1 on the edge
@@ -1032,7 +1105,6 @@ fn orbGlassLiquidAnim(uv01: vec2<f32>) -> vec4<f32> {
   // Branch dispatch. Source indices 0/2/4/6 are progA (md < 0); the others are
   // progB at the sheet's own mode number. An if-chain avoids a runtime-indexed
   // lookup here.
-  let s = i32(u.style + 0.5);
   var md: i32 = -1;
   if (s == 1) { md = 1; }
   else if (s == 3 || s == 8) { md = 7; }
@@ -1040,7 +1112,8 @@ fn orbGlassLiquidAnim(uv01: vec2<f32>) -> vec4<f32> {
   else if (s == 7) { md = 0; }
 
   let clearFa = 1.0 - smoothstep(GL_CLEAR_EA, GL_CLEAR_EB, pd);
-  let normal = glsContourNormal(uv, rad, t, u.contourDeform);
+  let contourNormal = glsContourNormal(uv, rad, t, u.contourDeform);
+  let normal = glsRefractionNormal(contourNormal, p, t, s);
   let edgeDepth = max(1.0 - pd, 0.0);
   let refractionWidth = 0.015 + 0.95 * clamp(u.shellMidAlpha, 0.0, 1.0);
   let refractionT = edgeDepth / max(refractionWidth, 0.001);
@@ -1069,12 +1142,17 @@ fn orbGlassLiquidAnim(uv01: vec2<f32>) -> vec4<f32> {
     else { fcol = glsFluid(fu, md, t); }
   }
 
-  // The no-glass branch is the fluid alone, expanded to the sphere boundary.
+  // Voice-like presets become a true emissive layer when glass is disabled.
+  // Their empty pixels no longer inherit the opaque circular canvas fill.
   let lum = dot(fcol, vec3<f32>(0.213, 0.715, 0.072));
   let clearSat = clamp(vec3<f32>(lum) + (fcol - vec3<f32>(lum)) * 1.22,
                        vec3<f32>(0.0), vec3<f32>(1.0));
   var col = glsOver(u.canvasColor.rgb, clearSat, 0.99 * clearFa);
-
+  if (emissionOnly) {
+    let signal = max(clearSat.r, max(clearSat.g, clearSat.b));
+    let emissionCoverage = smoothstep(0.025, 0.16, signal);
+    col = clearSat * emissionCoverage;
+  }
   if (u.glassEnabled > 0.5) {
     // Surface lighting stays on a thin arc. The broad visual change comes from
     // the refracted fluid above, not from a translucent white overlay.
@@ -1117,5 +1195,9 @@ fn orbGlassLiquidAnim(uv01: vec2<f32>) -> vec4<f32> {
   // the render this file was diffed against, and zero is the default.
   let edged = mfEdgeGlow(col, uv, vec2<f32>(0.0), contourRad,
                          u.edgeSoftness, u.edgeGlow, u.glowColor.rgb);
-  return vec4<f32>(clamp(edged, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+  let finalColor = clamp(edged, vec3<f32>(0.0), vec3<f32>(1.0));
+  let emissionAlpha = max(finalColor.r, max(finalColor.g, finalColor.b));
+  let sphereAlpha = clamp(max(ballA, emissionAlpha), 0.0, 1.0);
+  let finalAlpha = select(sphereAlpha, emissionAlpha, emissionOnly);
+  return vec4<f32>(finalColor, finalAlpha);
 }

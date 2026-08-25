@@ -55,10 +55,10 @@ try {
   const metalOpticalWeights = extractOpticalWeights(
     metal,
     {
-      inner: /\(opticalRim \* _e247\) \* ([\d.]+)\)/,
-      dispersion: /\* \(([\d.]+) \+ \(([\d.]+) \* _e275\)\)/,
-      key: /metal::clamp\(_e332, 0\.0, 2\.0\)\) \* ([\d.]+);/,
-      fill: /metal::clamp\(_e345, 0\.0, 2\.0\)\) \* ([\d.]+);/,
+      inner: /opticalRim \* u\.glassOpacity \* ([\d.]+)/,
+      dispersion: /\* \(([\d.]+) \+ ([\d.]+) \* u\.shellEdgeAlpha\)/,
+      key: /metal::clamp\(u\.sheen, 0\.0, 2\.0\) \* ([\d.]+);/,
+      fill: /metal::clamp\(u\.sheen, 0\.0, 2\.0\) \* ([\d.]+);\n\s*col = glsOver\(col, u\.sheenColor/,
     },
     "Metal",
   );
@@ -67,6 +67,49 @@ try {
   assert.ok(wgslOpticalWeights.dispersion[0] >= 0.1, "色散底色权重过低，颜色控件不可见");
   assert.ok(wgslOpticalWeights.key[0] >= 1, "主高光权重过低，颜色控件不可见");
   assert.ok(wgslOpticalWeights.fill[0] >= 0.8, "辅高光权重过低，颜色控件不可见");
+  assert.match(
+    wgsl,
+    /emissionOnly = u\.glassEnabled <= 0\.5 && \(s == 9 \|\| s == 14\)/,
+    "WGSL 无玻璃发光层分发缺失",
+  );
+  assert.match(
+    metal,
+    /emissionOnly = u\.glassEnabled <= 0\.5 && \(s == 9 \|\| s == 14\)/,
+    "Metal 无玻璃发光层分发缺失",
+  );
+  assert.match(wgsl, /fn glsFinishEmissionFluid\(/, "WGSL 发光层收尾函数缺失");
+  assert.match(metal, /metal::float3 glsFinishEmissionFluid\(/, "Metal 发光层收尾函数缺失");
+  assert.match(wgsl, /emissionCoverage = smoothstep\(0\.025, 0\.16, signal\)/);
+  assert.match(metal, /emissionCoverage = metal::smoothstep\(0\.025, 0\.16, signal\)/);
+  assert.match(wgsl, /emissionMask = mix\(smoothstep\(0\.08, 0\.25, energy \+ whiteCore \* 0\.12\)/);
+  assert.match(metal, /emissionMask = metal::mix\(/);
+  assert.match(
+    shaderModule.orbShaderSource,
+    /return vec4<f32>\(c\.rgb \* fit, c\.a \* fit\)/,
+    "WebGPU 外层包装器必须保留球体着色器输出的 Alpha",
+  );
+  assert.doesNotMatch(
+    shaderModule.orbShaderSource,
+    /let alpha = select\(ballA/,
+    "WebGPU 外层包装器不能重建不透明球体 Alpha",
+  );
+  assert.match(
+    metal,
+    /metal::float4\(_e2\.xyz \* fit, _e2\.w \* fit\)/,
+    "Metal 外层包装器必须保留球体着色器输出的 Alpha",
+  );
+  assert.match(wgsl, /fn glsRefractiveBlobFluid\(/, "WGSL 折射软体流场缺失");
+  assert.match(metal, /metal::float3 glsRefractiveBlobFluid\(/, "Metal 折射软体流场缺失");
+  assert.match(
+    wgsl,
+    /fn glsRefractionNormal\([\s\S]*?if \(style != 23\)/,
+    "WGSL 折射软体动态法线缺失",
+  );
+  assert.match(
+    metal,
+    /metal::float2 glsRefractionNormal\([\s\S]*?if \(style != 23\)/,
+    "Metal 折射软体动态法线缺失",
+  );
 
   assert.ok(presets.styleNames.length > 0, "至少需要一个预设");
   assert.equal(
@@ -96,11 +139,21 @@ try {
       .map(Number);
     assert.deepEqual(webSeed, expectedSeed, `${style}: Web 参数与编辑器不一致`);
     assert.deepEqual(swiftSeed, expectedSeed, `${style}: Swift 参数与编辑器不一致`);
-    assert.equal(webSeed.length, 128, `${style}: uniform 长度错误`);
+    assert.equal(
+      webSeed.length,
+      uniforms.orbUniformFloatCount,
+      `${style}: uniform 长度错误`,
+    );
     assert.equal(webSeed[15], presets.styleFlowIndexes[style], `${style}: Web 分发索引错误`);
     assert.equal(swiftSeed[15], presets.styleFlowIndexes[style], `${style}: Swift 分发索引错误`);
     assert.equal(webSeed[19], 1, `${style}: Web 默认玻璃罩未开启`);
     assert.equal(swiftSeed[19], 1, `${style}: Swift 默认玻璃罩未开启`);
+
+    if (style === "refractiveBlob") {
+      assert.ok(webSeed[20] >= 0.7, "折射软体默认折射强度不足");
+      assert.ok(webSeed[12] >= 0.3, "折射软体默认折射带过窄");
+      assert.ok(webSeed[11] >= 0.4, "折射软体默认色散不足");
+    }
 
     if (style === "chromaticMetal") {
       const metalUniforms = [
@@ -129,7 +182,6 @@ try {
       assert.match(metal, /\+ cycle\n\s+\+ u\.metalOffset/, "Metal 主流场缺少单向相位推进");
       const loopDuration = (Math.PI * 2) / (0.46 * params.speed);
       assert.ok(loopDuration >= 11.5 && loopDuration <= 13, "色差金属默认循环时长偏离参考视频");
-      assert.match(swiftCode, /red: Double\(uniforms\[72\]\)/, "Swift 背景颜色索引未同步");
     }
 
     const webShaderMatch = webCode.match(/^    const shaderSource = (.+);$/m);
@@ -144,6 +196,14 @@ try {
     );
     assert.ok(swiftMetalMatch, `${style}: Swift Metal 源码缺失`);
     assert.equal(swiftMetalMatch[1], metal, `${style}: Swift Metal 源码失真`);
+    assert.match(swiftCode, /view\.isOpaque = false/, `${style}: Swift iOS 透明视图配置缺失`);
+    assert.match(swiftCode, /view\.layer\?\.isOpaque = false/, `${style}: Swift macOS 透明图层配置缺失`);
+    assert.match(swiftCode, /alpha: 0/, `${style}: Swift 透明清屏配置缺失`);
+    assert.match(
+      swiftCode,
+      /sourceRGBBlendFactor = \.one/,
+      `${style}: Swift 未使用预乘 Alpha 混合`,
+    );
 
     const flowIndex = presets.styleFlowIndexes[style];
     assert.match(wgsl, new RegExp(`style == ${flowIndex}\\b`), `${style}: WGSL 分支缺失`);

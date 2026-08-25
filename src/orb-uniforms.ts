@@ -1,5 +1,9 @@
 import { type OrbParams, styleFlowIndexes } from "./presets";
 
+export const orbUniformFloatCount = 128;
+export const orbColorOffset = 32;
+export const orbCanvasColorOffset = orbColorOffset + 10 * 4;
+
 const paletteStops = [
   "#F7FBFF",
   "#EFF6FD",
@@ -88,11 +92,11 @@ export function writeOrbUniforms(
     params.glowColor,
     ...paletteStops,
   ];
-  colors.forEach((hex, index) => target.set(rgb(hex), 32 + index * 4));
+  colors.forEach((hex, index) => target.set(rgb(hex), orbColorOffset + index * 4));
 }
 
 export function createOrbUniformSnapshot(params: OrbParams): number[] {
-  const values = new Float32Array(128);
+  const values = new Float32Array(orbUniformFloatCount);
   writeOrbUniforms(values, 1, 1, 0, params);
   return Array.from(values);
 }

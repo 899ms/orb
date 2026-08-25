@@ -1,5 +1,5 @@
 import { type OrbParams } from "./presets";
-import { writeOrbUniforms } from "./orb-uniforms";
+import { orbUniformFloatCount, writeOrbUniforms } from "./orb-uniforms";
 import { orbShaderSource } from "./shader-source";
 
 export type OrbRendererOptions = {
@@ -81,7 +81,7 @@ export function createOrbRenderer({
       },
       primitive: { topology: "triangle-list" },
     });
-    const values = new Float32Array(128);
+    const values = new Float32Array(orbUniformFloatCount);
     const uniformBuffer = device.createBuffer({
       size: values.byteLength,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,

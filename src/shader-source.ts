@@ -29,21 +29,12 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
   let rad = max(u.radius, 0.05);
   let t = u.time * u.speed;
   let contourRad = rad * glsContourScale(uv, t, u.contourDeform);
-  let pd = length(uv) / contourRad;
-  let ballA = 1.0 - smoothstep(
-    0.99 - mfEdgeD(u.edgeSoftness),
-    1.01 + mfEdgeD(u.edgeSoftness),
-    pd,
-  );
-  let lum = max(c.r, max(c.g, c.b));
   let q = (2.0 * fc - u.size) / u.size;
   let fitEnd = 1.0;
   let fitFeather = 2.0 / max(min(u.size.x, u.size.y), 1.0);
   let fitStart = min(mix(contourRad, fitEnd, 0.5), fitEnd - fitFeather);
   let fit = 1.0 - smoothstep(fitStart, fitEnd, max(abs(q.x), abs(q.y)));
-  let alpha = select(ballA, max(ballA, lum), u.edgeGlow > 0.0);
-
-  return vec4<f32>(c.rgb * fit, clamp(alpha, 0.0, 1.0) * fit);
+  return vec4<f32>(c.rgb * fit, c.a * fit);
 }
 `;
 
