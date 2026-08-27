@@ -1,17 +1,21 @@
 import { type OrbParams } from "./presets";
+import {
+  createOrbTransitionController,
+  type OrbRenderTarget,
+} from "./orb-states";
 import { orbUniformFloatCount, writeOrbUniforms } from "./orb-uniforms";
 import { orbShaderSource } from "./shader-source";
 
 export type OrbRendererOptions = {
   canvas: HTMLCanvasElement;
-  getParams: () => OrbParams;
+  getTarget: () => OrbRenderTarget;
   onError: (error: Error) => void;
   onReady: () => void;
 };
 
 export function createOrbRenderer({
   canvas,
-  getParams,
+  getTarget,
   onError,
   onReady,
 }: OrbRendererOptions): () => void {
@@ -91,6 +95,7 @@ export function createOrbRenderer({
       entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
     });
     const startedAt = performance.now();
+    const transition = createOrbTransitionController(getTarget());
 
     device.lost.then((info) => {
       fail(new Error(`WebGPU 设备已断开：${info.message || info.reason}`));
@@ -118,12 +123,13 @@ export function createOrbRenderer({
 
       try {
         resize();
+        const params: OrbParams = transition.sample(getTarget(), now);
         writeOrbUniforms(
           values,
           canvas.width,
           canvas.height,
           (now - startedAt) / 1000,
-          getParams(),
+          params,
         );
         device.queue.writeBuffer(uniformBuffer, 0, values);
 

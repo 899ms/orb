@@ -54,8 +54,20 @@ import {
 } from "./editor-i18n";
 import { createOrbRenderer } from "./orb-renderer";
 import {
+  createOrbStateConfiguration,
+  createPresetOrbStateConfiguration,
+  defaultOrbState,
+  defaultOrbTransitionDuration,
+  isOrbStateProfileKey,
+  orbStateNames,
+  orbStateProfileKeys,
+  resolveOrbStateParams,
+  updateOrbStateParam,
+  type OrbStateConfiguration,
+  type OrbStateName,
+} from "./orb-states";
+import {
   effectDefaults,
-  initialParams,
   orbRadiusRange,
   type OrbParams,
   styleNames,
@@ -95,6 +107,12 @@ const defaultSceneText = "Thinking...";
 const maxSceneTextLength = 20;
 const hashSyncDelayMs = 500;
 const localeStorageKey = "liquid-orb-editor-locale";
+const transitionDurationRange = { min: 0.1, max: 2, step: 0.05 } as const;
+
+type OrbEditorState = {
+  configuration: OrbStateConfiguration;
+  activeState: OrbStateName;
+};
 
 type NumericSpec = {
   key: NumericKey;
@@ -287,15 +305,21 @@ function readSceneTextFromHash(): string {
   return text === null ? defaultSceneText : limitSceneText(text);
 }
 
-function readParamsFromHash(): OrbParams {
-  const params = { ...initialParams };
+function stateHashKey(state: OrbStateName, key: string): string {
+  if (state === "thinking") return key;
+  return `idle${key.charAt(0).toUpperCase()}${key.slice(1)}`;
+}
+
+function readEditorStateFromHash(): OrbEditorState {
   const search = new URLSearchParams(window.location.hash.slice(1));
   const style = search.get("style");
-
-  if (style && styleNames.includes(style as StyleName)) {
-    params.style = style as StyleName;
-    Object.assign(params, stylePresets[params.style]);
-  }
+  const selectedStyle = style && styleNames.includes(style as StyleName)
+    ? style as StyleName
+    : effectDefaults.style;
+  const params: OrbParams = {
+    style: selectedStyle,
+    ...stylePresets[selectedStyle],
+  };
 
   const glass = search.get("glass");
   if (glass === "1") params.glassEnabled = true;
@@ -317,23 +341,82 @@ function readParamsFromHash(): OrbParams {
     if (value) params[key] = value;
   }
 
-  return params;
+  const transitionRaw = search.get("transition");
+  const transitionValue = transitionRaw === null ? null : Number(transitionRaw);
+  const transitionDuration = transitionValue !== null && Number.isFinite(transitionValue)
+    ? clamp(
+      transitionValue,
+      transitionDurationRange.min,
+      transitionDurationRange.max,
+    )
+    : defaultOrbTransitionDuration;
+  let configuration = createOrbStateConfiguration(params, transitionDuration);
+
+  for (const key of orbStateProfileKeys) {
+    const raw = search.get(stateHashKey("idle", key));
+    if (raw === null) continue;
+
+    if (typeof configuration.profiles.idle[key] === "number") {
+      const spec = numericSpecByKey.get(key as NumericKey);
+      const value = Number(raw);
+      if (spec && Number.isFinite(value)) {
+        configuration = updateOrbStateParam(
+          configuration,
+          "idle",
+          key,
+          clamp(value, spec.min, spec.max),
+        );
+      }
+    } else {
+      const color = normalizeColor(raw);
+      if (color) configuration = updateOrbStateParam(configuration, "idle", key, color);
+    }
+  }
+
+  const state = search.get("state");
+  const activeState = state && orbStateNames.includes(state as OrbStateName)
+    ? state as OrbStateName
+    : defaultOrbState;
+
+  return { configuration, activeState };
 }
 
-function writeHash(params: OrbParams, previewMode: PreviewMode, sceneText: string): void {
+function writeHash(
+  editorState: OrbEditorState,
+  previewMode: PreviewMode,
+  sceneText: string,
+): void {
+  const { configuration, activeState } = editorState;
+  const params = resolveOrbStateParams(configuration, "thinking");
   const search = new URLSearchParams();
   search.set("effect", "orb-glass-liquid");
   search.set("style", params.style);
   search.set("glass", params.glassEnabled ? "1" : "0");
+  search.set("state", activeState);
+  search.set("transition", String(configuration.transitionDuration));
   search.set("preview", previewMode);
   search.set("text", sceneText);
-  for (const spec of numericSpecs) search.set(spec.key, String(params[spec.key]));
-  for (const key of colorKeys) search.set(key, params[key]);
+  for (const spec of numericSpecs) {
+    search.set(spec.key, String(params[spec.key]));
+    if (isOrbStateProfileKey(spec.key)) {
+      search.set(
+        stateHashKey("idle", spec.key),
+        String(configuration.profiles.idle[spec.key]),
+      );
+    }
+  }
+  for (const key of colorKeys) {
+    search.set(key, params[key]);
+    if (isOrbStateProfileKey(key)) {
+      search.set(stateHashKey("idle", key), configuration.profiles.idle[key]);
+    }
+  }
   window.history.replaceState(null, "", `#${search.toString()}`);
 }
 
 function useSectionState() {
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({
+    state: false,
     motion: false,
     colors: true,
     shape: true,
@@ -367,7 +450,7 @@ function useStackedLayout(): boolean {
 
 export function App(): React.JSX.Element {
   const [locale, setLocale] = React.useState<Locale>(readInitialLocale);
-  const [params, setParams] = React.useState<OrbParams>(readParamsFromHash);
+  const [editorState, setEditorState] = React.useState<OrbEditorState>(readEditorStateFromHash);
   const [renderState, setRenderState] = React.useState<"loading" | "ready" | "error">("loading");
   const [errorMessage, setErrorMessage] = React.useState("");
   const [presetCollapsed, setPresetCollapsed] = React.useState(false);
@@ -378,11 +461,26 @@ export function App(): React.JSX.Element {
   const [codeOpen, setCodeOpen] = React.useState(false);
   const [codePlatform, setCodePlatform] = React.useState<"web" | "swift">("web");
   const [copiedPlatform, setCopiedPlatform] = React.useState<"web" | "swift" | "error" | null>(null);
-  const [codeParams, setCodeParams] = React.useState<OrbParams | null>(null);
+  const [codeState, setCodeState] = React.useState<OrbEditorState | null>(null);
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const stageRef = React.useRef<HTMLElement | null>(null);
   const copyBufferRef = React.useRef<HTMLTextAreaElement | null>(null);
-  const paramsRef = React.useRef(params);
+  const params = resolveOrbStateParams(
+    editorState.configuration,
+    editorState.activeState,
+  );
+  const presetStateParams = React.useMemo(
+    () => resolveOrbStateParams(
+      createPresetOrbStateConfiguration(params.style),
+      editorState.activeState,
+    ),
+    [editorState.activeState, params.style],
+  );
+  const renderTargetRef = React.useRef({
+    state: editorState.activeState,
+    params,
+    transitionDuration: editorState.configuration.transitionDuration,
+  });
   const sectionState = useSectionState();
   const stackedLayout = useStackedLayout();
   const copy = uiCopy[locale];
@@ -393,17 +491,32 @@ export function App(): React.JSX.Element {
     ],
     [copy.orbMode, copy.sceneMode],
   );
+  const orbStateOptions = React.useMemo(
+    () => [
+      { label: copy.idleState, value: "idle" },
+      { label: copy.thinkingState, value: "thinking" },
+    ],
+    [copy.idleState, copy.thinkingState],
+  );
 
   const webCode = React.useMemo(
-    () => (codeParams ? createWebExport(codeParams) : ""),
-    [codeParams],
+    () => (codeState
+      ? createWebExport(codeState.configuration, codeState.activeState)
+      : ""),
+    [codeState],
   );
   const swiftCode = React.useMemo(
-    () => (codeParams ? createSwiftExport(codeParams) : ""),
-    [codeParams],
+    () => (codeState
+      ? createSwiftExport(codeState.configuration, codeState.activeState)
+      : ""),
+    [codeState],
   );
 
-  paramsRef.current = params;
+  renderTargetRef.current = {
+    state: editorState.activeState,
+    params,
+    transitionDuration: editorState.configuration.transitionDuration,
+  };
 
   React.useEffect(() => {
     document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
@@ -417,15 +530,15 @@ export function App(): React.JSX.Element {
 
   React.useEffect(() => {
     const timeout = window.setTimeout(() => {
-      writeHash(params, previewMode, sceneText);
+      writeHash(editorState, previewMode, sceneText);
     }, hashSyncDelayMs);
 
     return () => window.clearTimeout(timeout);
-  }, [params, previewMode, sceneText]);
+  }, [editorState, previewMode, sceneText]);
 
   React.useEffect(() => {
     const syncFromHash = () => {
-      setParams(readParamsFromHash());
+      setEditorState(readEditorStateFromHash());
       setPreviewMode(readPreviewModeFromHash());
       setSceneText(readSceneTextFromHash());
       setPreviewScale(1);
@@ -445,7 +558,7 @@ export function App(): React.JSX.Element {
 
     return createOrbRenderer({
       canvas,
-      getParams: () => paramsRef.current,
+      getTarget: () => renderTargetRef.current,
       onError: (error) => {
         setErrorMessage(error.message);
         setRenderState("error");
@@ -484,21 +597,34 @@ export function App(): React.JSX.Element {
 
   const setParam = React.useCallback(
     <Key extends keyof OrbParams>(key: Key, value: OrbParams[Key]) => {
-      setParams((current) => ({ ...current, [key]: value }));
+      setEditorState((current) => ({
+        ...current,
+        configuration: updateOrbStateParam(
+          current.configuration,
+          current.activeState,
+          key,
+          value,
+        ),
+      }));
     },
     [],
   );
 
   const applyStyle = React.useCallback((style: StyleName) => {
-    setParams((current) => ({
-      ...current,
-      style,
-      ...stylePresets[style],
+    setEditorState((current) => ({
+      activeState: current.activeState,
+      configuration: {
+        ...createPresetOrbStateConfiguration(style),
+        transitionDuration: current.configuration.transitionDuration,
+      },
     }));
   }, []);
 
   const resetAll = React.useCallback(() => {
-    setParams({ ...effectDefaults });
+    setEditorState({
+      activeState: defaultOrbState,
+      configuration: createPresetOrbStateConfiguration(effectDefaults.style),
+    });
     setSceneText(defaultSceneText);
     setPreviewScale(1);
   }, []);
@@ -509,11 +635,39 @@ export function App(): React.JSX.Element {
     setPreviewScale(1);
   }, []);
 
+  const updateOrbState = React.useCallback((value: string) => {
+    if (!orbStateNames.includes(value as OrbStateName)) return;
+    setEditorState((current) => ({
+      ...current,
+      activeState: value as OrbStateName,
+    }));
+  }, []);
+
+  const updateTransitionDuration = React.useCallback((value: number) => {
+    setEditorState((current) => ({
+      ...current,
+      configuration: {
+        ...current.configuration,
+        transitionDuration: value,
+      },
+    }));
+  }, []);
+
   const openCode = React.useCallback(() => {
-    setCodeParams({ ...paramsRef.current });
+    setCodeState({
+      activeState: editorState.activeState,
+      configuration: {
+        ...editorState.configuration,
+        shared: { ...editorState.configuration.shared },
+        profiles: {
+          idle: { ...editorState.configuration.profiles.idle },
+          thinking: { ...editorState.configuration.profiles.thinking },
+        },
+      },
+    });
     setCopiedPlatform(null);
     setCodeOpen(true);
-  }, []);
+  }, [editorState]);
 
   const copyCode = React.useCallback(async () => {
     const code = codePlatform === "web" ? webCode : swiftCode;
@@ -547,7 +701,7 @@ export function App(): React.JSX.Element {
 
     return (
       <Slider
-        baseValue={stylePresets[params.style][key]}
+        baseValue={presetStateParams[key]}
         editValueLabel={copy.editValue(numericLabels[locale][key])}
         key={key}
         max={spec.max}
@@ -764,6 +918,36 @@ export function App(): React.JSX.Element {
                 </div>
               </PanelSection>
             ) : null}
+            <PanelSection
+              collapsed={sectionState.isCollapsed("state")}
+              collapseLabel={copy.collapseSection(copy.stateSection)}
+              collapsible
+              expandLabel={copy.expandSection(copy.stateSection)}
+              onCollapsedChange={sectionState.onCollapsedChange("state")}
+              title={copy.stateSection}
+            >
+              <div className="orb-state-control">
+                <SegmentedControl
+                  ariaLabel={copy.switchOrbState}
+                  name={copy.orbState}
+                  onValueChange={updateOrbState}
+                  options={orbStateOptions}
+                  value={editorState.activeState}
+                />
+              </div>
+              <Slider
+                baseValue={defaultOrbTransitionDuration}
+                editValueLabel={copy.editValue(copy.transitionDuration)}
+                max={transitionDurationRange.max}
+                min={transitionDurationRange.min}
+                name={copy.transitionDuration}
+                onValueChange={updateTransitionDuration}
+                showFill
+                step={transitionDurationRange.step}
+                unit="s"
+                value={editorState.configuration.transitionDuration}
+              />
+            </PanelSection>
             <PanelSection
               collapsed={sectionState.isCollapsed("motion")}
               collapseLabel={copy.collapseSection(copy.motionSection)}

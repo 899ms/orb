@@ -464,6 +464,10 @@ input {
   background: #fff;
 }
 
+.orb-state-control [data-slot="segmented-control"] {
+  width: 100%;
+}
+
 .color-control-loading {
   width: 100%;
   height: 48px;

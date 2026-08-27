@@ -5,16 +5,17 @@ import { createServer } from "vite";
 const server = await createServer({
   appType: "custom",
   logLevel: "error",
-  server: { middlewareMode: true },
+  server: { middlewareMode: true, ws: false },
 });
 
 try {
-  const [{ createSwiftExport, createWebExport }, presets, uniforms, shaderModule] =
+  const [{ createSwiftExport, createWebExport }, presets, uniforms, shaderModule, orbStates] =
     await Promise.all([
       server.ssrLoadModule("/src/code-export.ts"),
       server.ssrLoadModule("/src/presets.ts"),
       server.ssrLoadModule("/src/orb-uniforms.ts"),
       server.ssrLoadModule("/src/shader-source.ts"),
+      server.ssrLoadModule("/src/orb-states.ts"),
     ]);
   const [wgsl, metal] = await Promise.all([
     readFile(new URL("../effect.wgsl", import.meta.url), "utf8"),
@@ -118,36 +119,111 @@ try {
     "预设名称不能重复",
   );
 
-  for (const style of presets.styleNames) {
-    const params = { style, ...presets.stylePresets[style] };
-    const expectedSeed = uniforms.createOrbUniformSnapshot(params);
-    const webCode = createWebExport(params);
-    const swiftCode = createSwiftExport(params);
-
-    const webSeedMatch = webCode.match(/const uniformSeed = (\[[^;]+\]);/);
-    const swiftSeedMatch = swiftCode.match(
-      /private let orbUniformSeed: \[Float\] = \[([\s\S]*?)\]/,
+  function parseSwiftSeed(code, state) {
+    const name = state === "idle" ? "Idle" : "Thinking";
+    const match = code.match(
+      new RegExp(`private let orb${name}UniformSeed: \\[Float\\] = \\[([\\s\\S]*?)\\]`),
     );
-    assert.ok(webSeedMatch, `${style}: Web uniform seed 缺失`);
-    assert.ok(swiftSeedMatch, `${style}: Swift uniform seed 缺失`);
-
-    const webSeed = JSON.parse(webSeedMatch[1]);
-    const swiftSeed = swiftSeedMatch[1]
+    assert.ok(match, `Swift ${state} uniform seed 缺失`);
+    return match[1]
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean)
       .map(Number);
-    assert.deepEqual(webSeed, expectedSeed, `${style}: Web 参数与编辑器不一致`);
-    assert.deepEqual(swiftSeed, expectedSeed, `${style}: Swift 参数与编辑器不一致`);
-    assert.equal(
-      webSeed.length,
-      uniforms.orbUniformFloatCount,
-      `${style}: uniform 长度错误`,
+  }
+
+  for (const style of presets.styleNames) {
+    const configuration = orbStates.createPresetOrbStateConfiguration(style);
+    const thinkingParams = orbStates.resolveOrbStateParams(configuration, "thinking");
+    const idleParams = orbStates.resolveOrbStateParams(configuration, "idle");
+    const expectedSeeds = {
+      idle: uniforms.createOrbUniformSnapshot(idleParams),
+      thinking: uniforms.createOrbUniformSnapshot(thinkingParams),
+    };
+    const webCode = createWebExport(configuration, "thinking");
+    const swiftCode = createSwiftExport(configuration, "thinking");
+
+    const webSeedsMatch = webCode.match(/const stateSeeds = (\{"idle":\[[^;]+\});/);
+    assert.ok(webSeedsMatch, `${style}: Web 两态 uniform seed 缺失`);
+    const webSeeds = JSON.parse(webSeedsMatch[1]);
+    const swiftSeeds = {
+      idle: parseSwiftSeed(swiftCode, "idle"),
+      thinking: parseSwiftSeed(swiftCode, "thinking"),
+    };
+
+    assert.deepEqual(
+      thinkingParams,
+      { style, ...presets.stylePresets[style] },
+      `${style}: 思考态改变了原预设`,
     );
-    assert.equal(webSeed[15], presets.styleFlowIndexes[style], `${style}: Web 分发索引错误`);
-    assert.equal(swiftSeed[15], presets.styleFlowIndexes[style], `${style}: Swift 分发索引错误`);
-    assert.equal(webSeed[19], 1, `${style}: Web 默认玻璃罩未开启`);
-    assert.equal(swiftSeed[19], 1, `${style}: Swift 默认玻璃罩未开启`);
+    const differingStateKeys = orbStates.orbStateProfileKeys.filter(
+      (key) => idleParams[key] !== thinkingParams[key],
+    );
+    assert.ok(differingStateKeys.length > 0, `${style}: 空闲态与思考态没有视觉差异`);
+    assert.equal(idleParams.edgeGlow, 0, `${style}: 空闲态默认外发光必须为 0`);
+    assert.equal(thinkingParams.edgeGlow, 0, `${style}: 思考态默认外发光必须为 0`);
+
+    for (const state of orbStates.orbStateNames) {
+      assert.deepEqual(
+        webSeeds[state],
+        expectedSeeds[state],
+        `${style}/${state}: Web 参数与编辑器不一致`,
+      );
+      assert.deepEqual(
+        swiftSeeds[state],
+        expectedSeeds[state],
+        `${style}/${state}: Swift 参数与编辑器不一致`,
+      );
+      assert.equal(
+        webSeeds[state].length,
+        uniforms.orbUniformFloatCount,
+        `${style}/${state}: uniform 长度错误`,
+      );
+      assert.equal(
+        webSeeds[state][15],
+        presets.styleFlowIndexes[style],
+        `${style}/${state}: Web 分发索引错误`,
+      );
+      assert.equal(
+        swiftSeeds[state][15],
+        presets.styleFlowIndexes[style],
+        `${style}/${state}: Swift 分发索引错误`,
+      );
+      assert.equal(webSeeds[state][19], 1, `${style}/${state}: Web 默认玻璃罩未开启`);
+      assert.equal(swiftSeeds[state][19], 1, `${style}/${state}: Swift 默认玻璃罩未开启`);
+    }
+
+    const transition = orbStates.createOrbTransitionController({
+      state: "thinking",
+      params: thinkingParams,
+      transitionDuration: configuration.transitionDuration,
+    });
+    const transitionStart = transition.sample({
+      state: "idle",
+      params: idleParams,
+      transitionDuration: configuration.transitionDuration,
+    }, 100);
+    assert.deepEqual(transitionStart, thinkingParams, `${style}: 状态切换起点不连续`);
+    const halfwayAt = 100 + configuration.transitionDuration * 500;
+    const halfway = transition.sample({
+      state: "idle",
+      params: idleParams,
+      transitionDuration: configuration.transitionDuration,
+    }, halfwayAt);
+    assert.notEqual(halfway.speed, thinkingParams.speed, `${style}: 过渡中点没有开始变化`);
+    assert.notEqual(halfway.speed, idleParams.speed, `${style}: 过渡中点提前到达终值`);
+    const interrupted = transition.sample({
+      state: "thinking",
+      params: thinkingParams,
+      transitionDuration: configuration.transitionDuration,
+    }, halfwayAt);
+    assert.ok(
+      Math.abs(interrupted.speed - halfway.speed) < 0.000001,
+      `${style}: 反向切换产生数值跳变`,
+    );
+
+    const webSeed = webSeeds.thinking;
+    const swiftSeed = swiftSeeds.thinking;
 
     if (style === "refractiveBlob") {
       assert.ok(webSeed[20] >= 0.7, "折射软体默认折射强度不足");
@@ -170,7 +246,7 @@ try {
       ];
       for (const [index, key, label] of metalUniforms) {
         assert.ok(
-          Math.abs(webSeed[index] - params[key]) < 0.000001,
+          Math.abs(webSeed[index] - thinkingParams[key]) < 0.000001,
           `色差金属：${label}未写入 uniform`,
         );
         assert.match(wgsl, new RegExp(`\\b${key}:\\s+f32`), `WGSL 缺少 ${label} 参数`);
@@ -180,7 +256,7 @@ try {
       assert.match(metal, /float cycle = t \* 0\.46 \+ u\.metalPhase/, "Metal 动画未使用循环相位");
       assert.match(wgsl, /\+ cycle\n\s+\+ u\.metalOffset/, "WGSL 主流场缺少单向相位推进");
       assert.match(metal, /\+ cycle\n\s+\+ u\.metalOffset/, "Metal 主流场缺少单向相位推进");
-      const loopDuration = (Math.PI * 2) / (0.46 * params.speed);
+      const loopDuration = (Math.PI * 2) / (0.46 * thinkingParams.speed);
       assert.ok(loopDuration >= 11.5 && loopDuration <= 13, "色差金属默认循环时长偏离参考视频");
     }
 
@@ -210,6 +286,10 @@ try {
     assert.match(metal, new RegExp(`style == ${flowIndex}\\b`), `${style}: Metal 分支缺失`);
     assert.match(webCode, /device\.lost\.then/, `${style}: Web 设备丢失处理缺失`);
     assert.match(webCode, /uncapturederror/, `${style}: Web GPU 错误处理缺失`);
+    assert.match(webCode, /setState\(nextState\)/, `${style}: Web 状态 API 缺失`);
+    assert.match(webCode, /hasOwnProperty\.call\(stateSeeds, nextState\)/, `${style}: Web 状态 API 边界校验缺失`);
+    assert.match(swiftCode, /public enum LiquidOrbState/, `${style}: Swift 状态类型缺失`);
+    assert.match(swiftCode, /public init\(state: LiquidOrbState = \.thinking\)/, `${style}: Swift 初始状态不一致`);
   }
 
   const adjustedMetal = {
@@ -228,26 +308,59 @@ try {
     metalDepth: 0.81,
     colorA: "#DDE8E4",
   };
-  const adjustedExpected = uniforms.createOrbUniformSnapshot(adjustedMetal);
-  const adjustedWeb = createWebExport(adjustedMetal);
-  const adjustedSwift = createSwiftExport(adjustedMetal);
-  const adjustedWebMatch = adjustedWeb.match(/const uniformSeed = (\[[^;]+\]);/);
-  const adjustedSwiftMatch = adjustedSwift.match(
-    /private let orbUniformSeed: \[Float\] = \[([\s\S]*?)\]/,
+  let adjustedConfiguration = orbStates.createOrbStateConfiguration(adjustedMetal, 1.15);
+  adjustedConfiguration = orbStates.updateOrbStateParam(
+    adjustedConfiguration,
+    "idle",
+    "speed",
+    0.31,
   );
-  assert.ok(adjustedWebMatch, "调参后的 Web uniform seed 缺失");
-  assert.ok(adjustedSwiftMatch, "调参后的 Swift uniform seed 缺失");
-  const adjustedWebSeed = JSON.parse(adjustedWebMatch[1]);
-  const adjustedSwiftSeed = adjustedSwiftMatch[1]
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .map(Number);
-  assert.deepEqual(adjustedWebSeed, adjustedExpected, "调参后的 Web 导出与编辑器不一致");
-  assert.deepEqual(adjustedSwiftSeed, adjustedExpected, "调参后的 Swift 导出与编辑器不一致");
+  adjustedConfiguration = orbStates.updateOrbStateParam(
+    adjustedConfiguration,
+    "idle",
+    "colorA",
+    "#8296A0",
+  );
+  adjustedConfiguration = orbStates.updateOrbStateParam(
+    adjustedConfiguration,
+    "idle",
+    "radius",
+    0.81,
+  );
+  const adjustedExpected = Object.fromEntries(
+    orbStates.orbStateNames.map((state) => [
+      state,
+      uniforms.createOrbUniformSnapshot(
+        orbStates.resolveOrbStateParams(adjustedConfiguration, state),
+      ),
+    ]),
+  );
+  const adjustedWeb = createWebExport(adjustedConfiguration, "idle");
+  const adjustedSwift = createSwiftExport(adjustedConfiguration, "idle");
+  const adjustedWebMatch = adjustedWeb.match(/const stateSeeds = (\{"idle":\[[^;]+\});/);
+  assert.ok(adjustedWebMatch, "调参后的 Web 两态 uniform seed 缺失");
+  const adjustedWebSeeds = JSON.parse(adjustedWebMatch[1]);
+  for (const state of orbStates.orbStateNames) {
+    assert.deepEqual(
+      adjustedWebSeeds[state],
+      adjustedExpected[state],
+      `调参后的 Web ${state} 导出与编辑器不一致`,
+    );
+    assert.deepEqual(
+      parseSwiftSeed(adjustedSwift, state),
+      adjustedExpected[state],
+      `调参后的 Swift ${state} 导出与编辑器不一致`,
+    );
+    assert.ok(
+      Math.abs(adjustedExpected[state][4] - 0.81) < 0.000001,
+      `共享半径没有同步到 ${state}`,
+    );
+  }
+  assert.match(adjustedWeb, /let state = "idle";/, "Web 初始状态未匹配编辑器");
+  assert.match(adjustedSwift, /public init\(state: LiquidOrbState = \.idle\)/, "Swift 初始状态未匹配编辑器");
 
   console.log(
-    `Verified ${presets.styleNames.length} presets: editor, WebGPU, and SwiftUI parameters are identical.`,
+    `Verified ${presets.styleNames.length} presets across idle/thinking: editor, WebGPU, and SwiftUI parameters are identical.`,
   );
 } finally {
   await server.close();

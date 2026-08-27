@@ -1,7 +1,11 @@
-import { createOrbUniformSnapshot } from "./orb-uniforms";
-import { type OrbParams } from "./presets";
-import { orbShaderSource } from "./shader-source";
 import orbMetalSource from "../effect.metal?raw";
+import { createOrbUniformSnapshot } from "./orb-uniforms";
+import {
+  resolveOrbStateParams,
+  type OrbStateConfiguration,
+  type OrbStateName,
+} from "./orb-states";
+import { orbShaderSource } from "./shader-source";
 
 function formatSwiftFloats(values: number[]): string {
   const rows: string[] = [];
@@ -11,8 +15,18 @@ function formatSwiftFloats(values: number[]): string {
   return rows.join("\n");
 }
 
-export function createWebExport(params: OrbParams): string {
-  const uniformSeed = createOrbUniformSnapshot(params);
+function createStateSeeds(configuration: OrbStateConfiguration): Record<OrbStateName, number[]> {
+  return {
+    idle: createOrbUniformSnapshot(resolveOrbStateParams(configuration, "idle")),
+    thinking: createOrbUniformSnapshot(resolveOrbStateParams(configuration, "thinking")),
+  };
+}
+
+export function createWebExport(
+  configuration: OrbStateConfiguration,
+  initialState: OrbStateName,
+): string {
+  const stateSeeds = createStateSeeds(configuration);
   const shaderLiteral = JSON.stringify(orbShaderSource);
 
   return `<!doctype html>
@@ -20,10 +34,11 @@ export function createWebExport(params: OrbParams): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:," />
   <title>Liquid Orb</title>
   <style>
     html, body, canvas { width: 100%; height: 100%; margin: 0; }
-    body { overflow: hidden; background: ${params.canvasColor}; }
+    body { overflow: hidden; background: ${configuration.shared.canvasColor}; }
     canvas { display: block; }
     #status { position: fixed; inset: 0; display: grid; place-items: center; color: white; font: 14px system-ui; }
   </style>
@@ -33,12 +48,76 @@ export function createWebExport(params: OrbParams): string {
   <div id="status" hidden></div>
   <script type="module">
     const shaderSource = ${shaderLiteral};
-    const uniformSeed = ${JSON.stringify(uniformSeed)};
+    const stateSeeds = ${JSON.stringify(stateSeeds)};
+    const transitionDurationMs = ${configuration.transitionDuration * 1000};
     const canvas = document.querySelector("#orb");
     const status = document.querySelector("#status");
     let animationFrame = 0;
     let device = null;
     let stopped = false;
+    let state = ${JSON.stringify(initialState)};
+    let fromUniforms = new Float32Array(stateSeeds[state]);
+    let targetUniforms = new Float32Array(stateSeeds[state]);
+    const displayedUniforms = new Float32Array(stateSeeds[state]);
+    let transitionStartedAt = 0;
+    let activeTransitionDuration = 0;
+
+    function srgbToLinear(value) {
+      return value <= 0.04045
+        ? value / 12.92
+        : ((value + 0.055) / 1.055) ** 2.4;
+    }
+
+    function linearToSrgb(value) {
+      return value <= 0.0031308
+        ? value * 12.92
+        : 1.055 * value ** (1 / 2.4) - 0.055;
+    }
+
+    function mixSrgb(from, to, progress) {
+      return linearToSrgb(
+        srgbToLinear(from) + (srgbToLinear(to) - srgbToLinear(from)) * progress,
+      );
+    }
+
+    function transitionProgress(now) {
+      if (activeTransitionDuration === 0) return 1;
+      const raw = Math.min(1, Math.max(0, (now - transitionStartedAt) / activeTransitionDuration));
+      return raw * raw * (3 - 2 * raw);
+    }
+
+    function sampleTransition(now) {
+      const progress = transitionProgress(now);
+      for (let index = 3; index < displayedUniforms.length; index += 1) {
+        const colorComponent = index >= 32 && (index - 32) % 4 < 3;
+        displayedUniforms[index] = colorComponent
+          ? mixSrgb(fromUniforms[index], targetUniforms[index], progress)
+          : fromUniforms[index] + (targetUniforms[index] - fromUniforms[index]) * progress;
+      }
+      return displayedUniforms;
+    }
+
+    function setState(nextState) {
+      if (!Object.prototype.hasOwnProperty.call(stateSeeds, nextState)) {
+        throw new TypeError(\`Unknown liquid orb state: \${nextState}\`);
+      }
+      if (nextState === state) return;
+
+      const now = performance.now();
+      sampleTransition(now);
+      fromUniforms = new Float32Array(displayedUniforms);
+      targetUniforms = new Float32Array(stateSeeds[nextState]);
+      transitionStartedAt = now;
+      activeTransitionDuration = transitionDurationMs;
+      state = nextState;
+    }
+
+    Object.defineProperty(window, "liquidOrb", {
+      value: Object.freeze({
+        getState: () => state,
+        setState,
+      }),
+    });
 
     function stopWithError(error) {
       if (stopped) return;
@@ -73,7 +152,7 @@ export function createWebExport(params: OrbParams): string {
         fragment: { module: shader, entryPoint: "fs_main", targets: [{ format }] },
         primitive: { topology: "triangle-list" },
       });
-      const values = new Float32Array(uniformSeed);
+      const values = new Float32Array(displayedUniforms);
       const uniformBuffer = device.createBuffer({
         size: values.byteLength,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -102,6 +181,7 @@ export function createWebExport(params: OrbParams): string {
             canvas.width = width;
             canvas.height = height;
           }
+          values.set(sampleTransition(now));
           values[0] = width;
           values[1] = height;
           values[2] = (now - startedAt) / 1000;
@@ -143,10 +223,14 @@ export function createWebExport(params: OrbParams): string {
 </html>`;
 }
 
-export function createSwiftExport(params: OrbParams): string {
-  const uniformSeed = createOrbUniformSnapshot(params);
+export function createSwiftExport(
+  configuration: OrbStateConfiguration,
+  initialState: OrbStateName,
+): string {
+  const stateSeeds = createStateSeeds(configuration);
 
-  return `import MetalKit
+  return `import Foundation
+import MetalKit
 import QuartzCore
 import SwiftUI
 
@@ -154,9 +238,45 @@ private let orbMetalSource = #"""
 ${orbMetalSource}
 """#
 
-private let orbUniformSeed: [Float] = [
-${formatSwiftFloats(uniformSeed)}
+private let orbIdleUniformSeed: [Float] = [
+${formatSwiftFloats(stateSeeds.idle)}
 ]
+
+private let orbThinkingUniformSeed: [Float] = [
+${formatSwiftFloats(stateSeeds.thinking)}
+]
+
+private let orbTransitionDuration: CFTimeInterval = ${configuration.transitionDuration}
+
+public enum LiquidOrbState: Sendable {
+    case idle
+    case thinking
+}
+
+private func orbUniformSeed(for state: LiquidOrbState) -> [Float] {
+    switch state {
+    case .idle: orbIdleUniformSeed
+    case .thinking: orbThinkingUniformSeed
+    }
+}
+
+private func orbSrgbToLinear(_ value: Float) -> Float {
+    value <= 0.04045
+        ? value / 12.92
+        : Float(pow(Double((value + 0.055) / 1.055), 2.4))
+}
+
+private func orbLinearToSrgb(_ value: Float) -> Float {
+    value <= 0.0031308
+        ? value * 12.92
+        : 1.055 * Float(pow(Double(value), 1.0 / 2.4)) - 0.055
+}
+
+private func orbMixSrgb(_ from: Float, _ to: Float, _ progress: Float) -> Float {
+    orbLinearToSrgb(
+        orbSrgbToLinear(from) + (orbSrgbToLinear(to) - orbSrgbToLinear(from)) * progress
+    )
+}
 
 private enum LiquidOrbError: Error {
     case metalUnavailable
@@ -168,9 +288,21 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
     private let commandQueue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
     private let startedAt = CACurrentMediaTime()
-    private var uniforms = orbUniformSeed
+    private let stateLock = NSLock()
+    private var currentState: LiquidOrbState
+    private var fromUniforms: [Float]
+    private var targetUniforms: [Float]
+    private var displayedUniforms: [Float]
+    private var transitionStartedAt = CACurrentMediaTime()
+    private var activeTransitionDuration: CFTimeInterval = 0
 
-    init(view: MTKView) throws {
+    init(view: MTKView, state: LiquidOrbState) throws {
+        let initialUniforms = orbUniformSeed(for: state)
+        currentState = state
+        fromUniforms = initialUniforms
+        targetUniforms = initialUniforms
+        displayedUniforms = initialUniforms
+
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw LiquidOrbError.metalUnavailable
         }
@@ -216,6 +348,34 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
         super.init()
     }
 
+    func setState(_ state: LiquidOrbState) {
+        let now = CACurrentMediaTime()
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard state != currentState else { return }
+
+        fromUniforms = sampleTransition(at: now)
+        targetUniforms = orbUniformSeed(for: state)
+        transitionStartedAt = now
+        activeTransitionDuration = orbTransitionDuration
+        currentState = state
+    }
+
+    private func sampleTransition(at now: CFTimeInterval) -> [Float] {
+        let rawProgress = activeTransitionDuration == 0
+            ? 1
+            : min(1, max(0, (now - transitionStartedAt) / activeTransitionDuration))
+        let progress = Float(rawProgress * rawProgress * (3 - 2 * rawProgress))
+
+        for index in 3..<displayedUniforms.count {
+            let isColorComponent = index >= 32 && (index - 32) % 4 < 3
+            displayedUniforms[index] = isColorComponent
+                ? orbMixSrgb(fromUniforms[index], targetUniforms[index], progress)
+                : fromUniforms[index] + (targetUniforms[index] - fromUniforms[index]) * progress
+        }
+        return displayedUniforms
+    }
+
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
@@ -228,6 +388,9 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
             let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor)
         else { return }
 
+        stateLock.lock()
+        var uniforms = sampleTransition(at: CACurrentMediaTime())
+        stateLock.unlock()
         uniforms[0] = Float(view.drawableSize.width)
         uniforms[1] = Float(view.drawableSize.height)
         uniforms[2] = Float(CACurrentMediaTime() - startedAt)
@@ -245,10 +408,10 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
 private final class LiquidOrbCoordinator {
     private var renderer: LiquidOrbRenderer?
 
-    func makeView() -> MTKView {
+    func makeView(state: LiquidOrbState) -> MTKView {
         let view = MTKView(frame: .zero, device: nil)
         do {
-            let renderer = try LiquidOrbRenderer(view: view)
+            let renderer = try LiquidOrbRenderer(view: view, state: state)
             self.renderer = renderer
             view.delegate = renderer
             return view
@@ -256,27 +419,39 @@ private final class LiquidOrbCoordinator {
             preconditionFailure("Liquid Orb Metal initialization failed: \\(error)")
         }
     }
+
+    func setState(_ state: LiquidOrbState) {
+        renderer?.setState(state)
+    }
 }
 
 #if os(iOS)
 private struct LiquidOrbSurface: UIViewRepresentable {
+    let state: LiquidOrbState
+
     func makeCoordinator() -> LiquidOrbCoordinator { LiquidOrbCoordinator() }
-    func makeUIView(context: Context) -> MTKView { context.coordinator.makeView() }
-    func updateUIView(_ view: MTKView, context: Context) {}
+    func makeUIView(context: Context) -> MTKView { context.coordinator.makeView(state: state) }
+    func updateUIView(_ view: MTKView, context: Context) { context.coordinator.setState(state) }
 }
 #elseif os(macOS)
 private struct LiquidOrbSurface: NSViewRepresentable {
+    let state: LiquidOrbState
+
     func makeCoordinator() -> LiquidOrbCoordinator { LiquidOrbCoordinator() }
-    func makeNSView(context: Context) -> MTKView { context.coordinator.makeView() }
-    func updateNSView(_ view: MTKView, context: Context) {}
+    func makeNSView(context: Context) -> MTKView { context.coordinator.makeView(state: state) }
+    func updateNSView(_ view: MTKView, context: Context) { context.coordinator.setState(state) }
 }
 #endif
 
 public struct LiquidOrbView: View {
-    public init() {}
+    private let state: LiquidOrbState
+
+    public init(state: LiquidOrbState = .${initialState}) {
+        self.state = state
+    }
 
     public var body: some View {
-        LiquidOrbSurface()
+        LiquidOrbSurface(state: state)
     }
 }`;
 }
