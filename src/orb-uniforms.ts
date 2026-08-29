@@ -1,7 +1,7 @@
 import { type OrbParams, styleFlowIndexes } from "./presets";
 
-export const orbUniformFloatCount = 128;
-export const orbColorOffset = 32;
+export const orbUniformFloatCount = 136;
+export const orbColorOffset = 40;
 export const orbCanvasColorOffset = orbColorOffset + 10 * 4;
 
 const paletteStops = [
@@ -73,6 +73,14 @@ export function writeOrbUniforms(
       params.metalEvolution,
       params.metalRoughness,
       params.metalDepth,
+      params.particleDensity,
+      params.ribbonCount,
+      params.ribbonWidth,
+      params.ribbonTwist,
+      params.ribbonFold,
+      params.ribbonBreath,
+      params.particleSize,
+      params.particleBloom,
     ],
     3,
   );

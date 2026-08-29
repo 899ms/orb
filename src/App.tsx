@@ -35,6 +35,7 @@ import chromePreviewUrl from "./assets/presets/chrome.png";
 import chromaticMetalPreviewUrl from "./assets/presets/chromaticMetal.png";
 import frostPreviewUrl from "./assets/presets/frost.png";
 import opalPreviewUrl from "./assets/presets/opal.png";
+import particleRibbonPreviewUrl from "./assets/presets/particleRibbon.png";
 import plasmaPreviewUrl from "./assets/presets/plasma.png";
 import refractiveBlobPreviewUrl from "./assets/presets/refractiveBlob.png";
 import siriPreviewUrl from "./assets/presets/siri.png";
@@ -56,6 +57,7 @@ import { createOrbRenderer } from "./orb-renderer";
 import {
   createOrbStateConfiguration,
   createPresetOrbStateConfiguration,
+  defaultOrbActivationDuration,
   defaultOrbState,
   defaultOrbTransitionDuration,
   isOrbStateProfileKey,
@@ -92,9 +94,11 @@ const stylePreviewUrls: Record<StyleName, string> = {
   blueDrop: blueDropPreviewUrl,
   violetEmber: violetEmberPreviewUrl,
   refractiveBlob: refractiveBlobPreviewUrl,
+  particleRibbon: particleRibbonPreviewUrl,
   chromaticMetal: chromaticMetalPreviewUrl,
 };
 const compactPreviewStyles = new Set<StyleName>([
+  "particleRibbon",
   "blueDrop",
   "violetEmber",
   "refractiveBlob",
@@ -107,6 +111,7 @@ const defaultSceneText = "Thinking...";
 const maxSceneTextLength = 20;
 const hashSyncDelayMs = 500;
 const localeStorageKey = "liquid-orb-editor-locale";
+const activationDurationRange = { min: 0.05, max: 0.8, step: 0.01 } as const;
 const transitionDurationRange = { min: 0.1, max: 2, step: 0.05 } as const;
 
 type OrbEditorState = {
@@ -142,9 +147,10 @@ const sharpStyles: readonly StyleName[] = [
   "refractiveBlob",
 ];
 const standardShapeStyles = styleNames.filter(
-  (style) => style !== "chromaticMetal",
+  (style) => style !== "chromaticMetal" && style !== "particleRibbon",
 );
 const chromaticMetalStyles: readonly StyleName[] = ["chromaticMetal"];
+const particleRibbonStyles: readonly StyleName[] = ["particleRibbon"];
 
 const numericSpecs: readonly NumericSpec[] = [
   { key: "speed", min: 0, max: 3, step: 0.01 },
@@ -241,6 +247,62 @@ const numericSpecs: readonly NumericSpec[] = [
     max: 2,
     step: 0.02,
     enabledStyles: chromaticMetalStyles,
+  },
+  {
+    key: "particleDensity",
+    min: 0.2,
+    max: 1,
+    step: 0.01,
+    enabledStyles: particleRibbonStyles,
+  },
+  {
+    key: "ribbonCount",
+    min: 2,
+    max: 6,
+    step: 1,
+    enabledStyles: particleRibbonStyles,
+  },
+  {
+    key: "ribbonWidth",
+    min: 0.1,
+    max: 0.8,
+    step: 0.01,
+    enabledStyles: particleRibbonStyles,
+  },
+  {
+    key: "ribbonTwist",
+    min: 0.1,
+    max: 3,
+    step: 0.01,
+    enabledStyles: particleRibbonStyles,
+  },
+  {
+    key: "ribbonFold",
+    min: 0,
+    max: 1.2,
+    step: 0.01,
+    enabledStyles: particleRibbonStyles,
+  },
+  {
+    key: "ribbonBreath",
+    min: 0,
+    max: 0.8,
+    step: 0.01,
+    enabledStyles: particleRibbonStyles,
+  },
+  {
+    key: "particleSize",
+    min: 0.6,
+    max: 2.5,
+    step: 0.01,
+    enabledStyles: particleRibbonStyles,
+  },
+  {
+    key: "particleBloom",
+    min: 0,
+    max: 2,
+    step: 0.01,
+    enabledStyles: particleRibbonStyles,
   },
   { key: "shade", min: 0, max: 1.5, step: 0.01 },
   { key: "exposure", min: 0.2, max: 3, step: 0.02 },
@@ -350,7 +412,20 @@ function readEditorStateFromHash(): OrbEditorState {
       transitionDurationRange.max,
     )
     : defaultOrbTransitionDuration;
-  let configuration = createOrbStateConfiguration(params, transitionDuration);
+  const activationRaw = search.get("activation");
+  const activationValue = activationRaw === null ? null : Number(activationRaw);
+  const activationDuration = activationValue !== null && Number.isFinite(activationValue)
+    ? clamp(
+      activationValue,
+      activationDurationRange.min,
+      activationDurationRange.max,
+    )
+    : defaultOrbActivationDuration;
+  let configuration = createOrbStateConfiguration(
+    params,
+    transitionDuration,
+    activationDuration,
+  );
 
   for (const key of orbStateProfileKeys) {
     const raw = search.get(stateHashKey("idle", key));
@@ -393,6 +468,7 @@ function writeHash(
   search.set("style", params.style);
   search.set("glass", params.glassEnabled ? "1" : "0");
   search.set("state", activeState);
+  search.set("activation", String(configuration.activationDuration));
   search.set("transition", String(configuration.transitionDuration));
   search.set("preview", previewMode);
   search.set("text", sceneText);
@@ -479,6 +555,7 @@ export function App(): React.JSX.Element {
   const renderTargetRef = React.useRef({
     state: editorState.activeState,
     params,
+    activationDuration: editorState.configuration.activationDuration,
     transitionDuration: editorState.configuration.transitionDuration,
   });
   const sectionState = useSectionState();
@@ -515,6 +592,7 @@ export function App(): React.JSX.Element {
   renderTargetRef.current = {
     state: editorState.activeState,
     params,
+    activationDuration: editorState.configuration.activationDuration,
     transitionDuration: editorState.configuration.transitionDuration,
   };
 
@@ -615,6 +693,7 @@ export function App(): React.JSX.Element {
       activeState: current.activeState,
       configuration: {
         ...createPresetOrbStateConfiguration(style),
+        activationDuration: current.configuration.activationDuration,
         transitionDuration: current.configuration.transitionDuration,
       },
     }));
@@ -649,6 +728,16 @@ export function App(): React.JSX.Element {
       configuration: {
         ...current.configuration,
         transitionDuration: value,
+      },
+    }));
+  }, []);
+
+  const updateActivationDuration = React.useCallback((value: number) => {
+    setEditorState((current) => ({
+      ...current,
+      configuration: {
+        ...current.configuration,
+        activationDuration: value,
       },
     }));
   }, []);
@@ -936,6 +1025,18 @@ export function App(): React.JSX.Element {
                 />
               </div>
               <Slider
+                baseValue={defaultOrbActivationDuration}
+                editValueLabel={copy.editValue(copy.activationDuration)}
+                max={activationDurationRange.max}
+                min={activationDurationRange.min}
+                name={copy.activationDuration}
+                onValueChange={updateActivationDuration}
+                showFill
+                step={activationDurationRange.step}
+                unit="s"
+                value={editorState.configuration.activationDuration}
+              />
+              <Slider
                 baseValue={defaultOrbTransitionDuration}
                 editValueLabel={copy.editValue(copy.transitionDuration)}
                 max={transitionDurationRange.max}
@@ -998,6 +1099,14 @@ export function App(): React.JSX.Element {
               {renderSlider("metalOffset")}
               {renderSlider("metalPhase")}
               {renderSlider("metalEvolution")}
+              {renderSlider("particleDensity")}
+              {renderSlider("ribbonCount")}
+              {renderSlider("ribbonWidth")}
+              {renderSlider("ribbonTwist")}
+              {renderSlider("ribbonFold")}
+              {renderSlider("ribbonBreath")}
+              {renderSlider("particleSize")}
+              {renderSlider("particleBloom")}
             </PanelSection>
 
             <PanelSection

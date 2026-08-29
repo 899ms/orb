@@ -87,6 +87,14 @@ struct Uniforms {
   metalEvolution: f32,
   metalRoughness: f32,
   metalDepth:     f32,
+  particleDensity: f32,
+  ribbonCount:     f32,
+  ribbonWidth:     f32,
+  ribbonTwist:     f32,
+  ribbonFold:      f32,
+  ribbonBreath:    f32,
+  particleSize:    f32,
+  particleBloom:   f32,
   colorA:         vec4<f32>,
   colorB:         vec4<f32>,
   colorC:         vec4<f32>,
@@ -882,6 +890,13 @@ fn glsRefractiveBlobFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
   return glsFinishPresetFluid(color, p);
 }
 
+fn glsParticleRibbonFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
+  // The visible body is emitted by the dedicated particle pipeline. Keeping
+  // this branch empty lets the shared fullscreen pass contribute only the
+  // optional glass shell and its transparent background contract.
+  return vec3<f32>(0.0);
+}
+
 fn glsPresetFluid(p: vec2<f32>, style: i32, t: f32) -> vec3<f32> {
   if (style == 9) { return glsSiriFluid(p, t); }
   if (style == 10) { return glsAuroraFluid(p, t); }
@@ -895,6 +910,7 @@ fn glsPresetFluid(p: vec2<f32>, style: i32, t: f32) -> vec3<f32> {
   if (style == 21) { return glsVioletEmberFluid(p, t); }
   if (style == 22) { return glsChromaticMetalFluid(p, t); }
   if (style == 23) { return glsRefractiveBlobFluid(p, t); }
+  if (style == 24) { return glsParticleRibbonFluid(p, t); }
   return glsFrostFluid(p, t);
 }
 
@@ -1065,7 +1081,7 @@ fn orbGlassLiquidAnim(uv01: vec2<f32>) -> vec4<f32> {
   let rad = max(u.radius, 0.05);
   let t = u.time * u.speed;
   let s = i32(u.style + 0.5);
-  let emissionOnly = u.glassEnabled <= 0.5 && (s == 9 || s == 14);
+  let emissionOnly = u.glassEnabled <= 0.5 && (s == 9 || s == 14 || s == 24);
   let contourRad = rad * glsContourScale(uv, t, u.contourDeform);
 
   // Nothing on this pixel — and here that is the whole fluid and the whole
@@ -1147,7 +1163,12 @@ fn orbGlassLiquidAnim(uv01: vec2<f32>) -> vec4<f32> {
   let lum = dot(fcol, vec3<f32>(0.213, 0.715, 0.072));
   let clearSat = clamp(vec3<f32>(lum) + (fcol - vec3<f32>(lum)) * 1.22,
                        vec3<f32>(0.0), vec3<f32>(1.0));
-  var col = glsOver(u.canvasColor.rgb, clearSat, 0.99 * clearFa);
+  let particleGlassOverlay = s == 24;
+  var col = select(
+    glsOver(u.canvasColor.rgb, clearSat, 0.99 * clearFa),
+    vec3<f32>(0.0),
+    particleGlassOverlay,
+  );
   if (emissionOnly) {
     let signal = max(clearSat.r, max(clearSat.g, clearSat.b));
     let emissionCoverage = smoothstep(0.025, 0.16, signal);
@@ -1158,11 +1179,19 @@ fn orbGlassLiquidAnim(uv01: vec2<f32>) -> vec4<f32> {
     // the refracted fluid above, not from a translucent white overlay.
     // Its weights still need enough contrast to keep the exposed colour and
     // highlight controls perceptible in the compact scene preview.
-    let surfaceWidth = 0.026 + 0.055 * clamp(u.shellEdgeAlpha, 0.0, 1.0);
+    let surfaceWidth = select(
+      0.026 + 0.055 * clamp(u.shellEdgeAlpha, 0.0, 1.0),
+      0.09 + 0.12 * clamp(u.shellEdgeAlpha, 0.0, 1.0),
+      particleGlassOverlay,
+    );
     let surfaceBand = (1.0 - smoothstep(0.0, surfaceWidth, edgeDepth)) * clearFa;
-    let opticalRim = pow(surfaceBand, 1.8);
-    col = glsOver(col, u.shellInner.rgb,
-                  opticalRim * u.glassOpacity * 0.45);
+    let opticalRim = pow(surfaceBand, select(1.8, 1.3, particleGlassOverlay));
+    let innerRimAlpha = select(
+      opticalRim * u.glassOpacity * 0.45,
+      opticalRim * u.glassOpacity * 0.14,
+      particleGlassOverlay,
+    );
+    col = glsOver(col, u.shellInner.rgb, innerRimAlpha);
 
     let coolDirection = normalize(vec2<f32>(0.84, 0.54));
     let warmDirection = normalize(vec2<f32>(-0.62, -0.78));
@@ -1198,6 +1227,10 @@ fn orbGlassLiquidAnim(uv01: vec2<f32>) -> vec4<f32> {
   let finalColor = clamp(edged, vec3<f32>(0.0), vec3<f32>(1.0));
   let emissionAlpha = max(finalColor.r, max(finalColor.g, finalColor.b));
   let sphereAlpha = clamp(max(ballA, emissionAlpha), 0.0, 1.0);
-  let finalAlpha = select(sphereAlpha, emissionAlpha, emissionOnly);
+  let finalAlpha = select(
+    sphereAlpha,
+    emissionAlpha,
+    emissionOnly || particleGlassOverlay,
+  );
   return vec4<f32>(finalColor, finalAlpha);
 }

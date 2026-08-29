@@ -1,4 +1,5 @@
-import { type OrbParams } from "./presets";
+import { particleRibbonInstanceCount } from "./particle-ribbon";
+import { styleFlowIndexes, type OrbParams } from "./presets";
 import {
   createOrbTransitionController,
   type OrbRenderTarget,
@@ -22,13 +23,17 @@ export function createOrbRenderer({
   let disposed = false;
   let animationFrame = 0;
   let device: GPUDevice | null = null;
+  let ribbonTarget: GPUTexture | null = null;
   let readyNotified = false;
   let failed = false;
+  let lastFrameAt: number | null = null;
+  let motionPhase = 0;
 
   function fail(error: Error): void {
     if (disposed || failed) return;
     failed = true;
     cancelAnimationFrame(animationFrame);
+    ribbonTarget?.destroy();
     device?.destroy();
     onError(error);
   }
@@ -81,7 +86,67 @@ export function createOrbRenderer({
       fragment: {
         module: shader,
         entryPoint: "fs_main",
-        targets: [{ format }],
+        targets: [{
+          format,
+          blend: {
+            color: {
+              srcFactor: "one",
+              dstFactor: "one-minus-src-alpha",
+              operation: "add",
+            },
+            alpha: {
+              srcFactor: "one",
+              dstFactor: "one-minus-src-alpha",
+              operation: "add",
+            },
+          },
+        }],
+      },
+      primitive: { topology: "triangle-list" },
+    });
+    const ribbonPipeline = device.createRenderPipeline({
+      label: "particle-ribbon-pipeline",
+      layout: "auto",
+      vertex: { module: shader, entryPoint: "ribbon_vs_main" },
+      fragment: {
+        module: shader,
+        entryPoint: "ribbon_fs_main",
+        targets: [{
+          format,
+          blend: {
+            color: { srcFactor: "one", dstFactor: "one", operation: "add" },
+            alpha: {
+              srcFactor: "one",
+              dstFactor: "one-minus-src-alpha",
+              operation: "add",
+            },
+          },
+        }],
+      },
+      primitive: { topology: "triangle-list" },
+    });
+    const ribbonCompositePipeline = device.createRenderPipeline({
+      label: "particle-ribbon-glass-composite-pipeline",
+      layout: "auto",
+      vertex: { module: shader, entryPoint: "vs_main" },
+      fragment: {
+        module: shader,
+        entryPoint: "ribbon_composite_fs_main",
+        targets: [{
+          format,
+          blend: {
+            color: {
+              srcFactor: "one",
+              dstFactor: "one-minus-src-alpha",
+              operation: "add",
+            },
+            alpha: {
+              srcFactor: "one",
+              dstFactor: "one-minus-src-alpha",
+              operation: "add",
+            },
+          },
+        }],
       },
       primitive: { topology: "triangle-list" },
     });
@@ -94,7 +159,17 @@ export function createOrbRenderer({
       layout: pipeline.getBindGroupLayout(0),
       entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
     });
-    const startedAt = performance.now();
+    const ribbonBindGroup = device.createBindGroup({
+      layout: ribbonPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
+    });
+    const ribbonSampler = device.createSampler({
+      addressModeU: "clamp-to-edge",
+      addressModeV: "clamp-to-edge",
+      magFilter: "linear",
+      minFilter: "linear",
+    });
+    let ribbonCompositeBindGroup: GPUBindGroup | null = null;
     const transition = createOrbTransitionController(getTarget());
 
     device.lost.then((info) => {
@@ -113,7 +188,29 @@ export function createOrbRenderer({
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
         canvas.height = height;
+        ribbonTarget?.destroy();
+        ribbonTarget = null;
+        ribbonCompositeBindGroup = null;
       }
+    }
+
+    function ensureRibbonTarget(): void {
+      if (ribbonTarget && ribbonCompositeBindGroup) return;
+
+      ribbonTarget = device!.createTexture({
+        label: "particle-ribbon-offscreen-texture",
+        size: { width: canvas.width, height: canvas.height },
+        format,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+      });
+      ribbonCompositeBindGroup = device!.createBindGroup({
+        layout: ribbonCompositePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: uniformBuffer } },
+          { binding: 1, resource: ribbonTarget.createView() },
+          { binding: 2, resource: ribbonSampler },
+        ],
+      });
     }
 
     function frame(now: number): void {
@@ -124,28 +221,54 @@ export function createOrbRenderer({
       try {
         resize();
         const params: OrbParams = transition.sample(getTarget(), now);
+        const frameDelta = lastFrameAt === null
+          ? 0
+          : Math.min(0.1, Math.max(0, (now - lastFrameAt) / 1000));
+        lastFrameAt = now;
+        motionPhase += frameDelta * Math.max(params.speed, 0);
+        const shaderTime = motionPhase / Math.max(params.speed, 0.001);
         writeOrbUniforms(
           values,
           canvas.width,
           canvas.height,
-          (now - startedAt) / 1000,
+          shaderTime,
           params,
         );
         device.queue.writeBuffer(uniformBuffer, 0, values);
 
+        const isParticleRibbon =
+          styleFlowIndexes[params.style] === styleFlowIndexes.particleRibbon;
         const encoder = device.createCommandEncoder();
-        const pass = encoder.beginRenderPass({
-          colorAttachments: [
-            {
-              view: gpuContext.getCurrentTexture().createView(),
+        if (isParticleRibbon) {
+          ensureRibbonTarget();
+          const particlePass = encoder.beginRenderPass({
+            colorAttachments: [{
+              view: ribbonTarget!.createView(),
               clearValue: { r: 0, g: 0, b: 0, a: 0 },
               loadOp: "clear",
               storeOp: "store",
-            },
-          ],
+            }],
+          });
+          particlePass.setPipeline(ribbonPipeline);
+          particlePass.setBindGroup(0, ribbonBindGroup);
+          particlePass.draw(6, particleRibbonInstanceCount, 0, 0);
+          particlePass.end();
+        }
+        const pass = encoder.beginRenderPass({
+          colorAttachments: [{
+            view: gpuContext.getCurrentTexture().createView(),
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: "clear",
+            storeOp: "store",
+          }],
         });
-        pass.setPipeline(pipeline);
-        pass.setBindGroup(0, bindGroup);
+        if (isParticleRibbon) {
+          pass.setPipeline(ribbonCompositePipeline);
+          pass.setBindGroup(0, ribbonCompositeBindGroup!);
+        } else {
+          pass.setPipeline(pipeline);
+          pass.setBindGroup(0, bindGroup);
+        }
         pass.draw(3, 1, 0, 0);
         pass.end();
         device.queue.submit([encoder.finish()]);
@@ -169,6 +292,7 @@ export function createOrbRenderer({
   return () => {
     disposed = true;
     cancelAnimationFrame(animationFrame);
+    ribbonTarget?.destroy();
     device?.destroy();
   };
 }

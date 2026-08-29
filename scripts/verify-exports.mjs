@@ -17,9 +17,12 @@ try {
       server.ssrLoadModule("/src/shader-source.ts"),
       server.ssrLoadModule("/src/orb-states.ts"),
     ]);
-  const [wgsl, metal] = await Promise.all([
+  const [wgsl, metal, particlePreview, rendererSource, appSource] = await Promise.all([
     readFile(new URL("../effect.wgsl", import.meta.url), "utf8"),
     readFile(new URL("../effect.metal", import.meta.url), "utf8"),
+    readFile(new URL("../src/assets/presets/particleRibbon.png", import.meta.url)),
+    readFile(new URL("../src/orb-renderer.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
   ]);
   const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 
@@ -70,12 +73,12 @@ try {
   assert.ok(wgslOpticalWeights.fill[0] >= 0.8, "辅高光权重过低，颜色控件不可见");
   assert.match(
     wgsl,
-    /emissionOnly = u\.glassEnabled <= 0\.5 && \(s == 9 \|\| s == 14\)/,
+    /emissionOnly = u\.glassEnabled <= 0\.5 && \(s == 9 \|\| s == 14 \|\| s == 24\)/,
     "WGSL 无玻璃发光层分发缺失",
   );
   assert.match(
     metal,
-    /emissionOnly = u\.glassEnabled <= 0\.5 && \(s == 9 \|\| s == 14\)/,
+    /emissionOnly = u\.glassEnabled <= 0\.5 && \(s == 9 \|\| s == 14 \|\| s == 24\)/,
     "Metal 无玻璃发光层分发缺失",
   );
   assert.match(wgsl, /fn glsFinishEmissionFluid\(/, "WGSL 发光层收尾函数缺失");
@@ -113,6 +116,23 @@ try {
   );
 
   assert.ok(presets.styleNames.length > 0, "至少需要一个预设");
+  assert.equal(
+    particlePreview.subarray(0, 8).toString("hex"),
+    "89504e470d0a1a0a",
+    "量子丝带预览图必须是真实 PNG 文件",
+  );
+  assert.equal(particlePreview.readUInt32BE(16), 440, "量子丝带预览图宽度必须为 440");
+  assert.equal(particlePreview.readUInt32BE(20), 330, "量子丝带预览图高度必须为 330");
+  assert.match(
+    appSource,
+    /compactPreviewStyles = new Set<StyleName>\(\[[\s\S]*?"particleRibbon"/,
+    "量子丝带预览图未使用统一的小球留白",
+  );
+  assert.equal(
+    uniforms.orbUniformFloatCount,
+    uniforms.orbColorOffset + 24 * 4,
+    "uniform 缓冲区长度必须与标量参数和 24 组颜色精确匹配",
+  );
   assert.equal(
     new Set(presets.styleNames).size,
     presets.styleNames.length,
@@ -160,6 +180,23 @@ try {
       (key) => idleParams[key] !== thinkingParams[key],
     );
     assert.ok(differingStateKeys.length > 0, `${style}: 空闲态与思考态没有视觉差异`);
+    assert.ok(
+      thinkingParams.speed >= idleParams.speed * 3,
+      `${style}: 思考态速度没有形成明显差异`,
+    );
+    assert.ok(
+      thinkingParams.exposure > idleParams.exposure,
+      `${style}: 思考态亮度没有提高`,
+    );
+    const differingMotionKeys = orbStates.orbStateNumericKeys.filter(
+      (key) => key !== "speed" && key !== "exposure" && idleParams[key] !== thinkingParams[key],
+    );
+    assert.ok(differingMotionKeys.length >= 3, `${style}: 思考态运动层次不足`);
+    const differingColorKeys = orbStates.orbStateColorKeys.filter(
+      (key) => idleParams[key] !== thinkingParams[key],
+    );
+    assert.equal(differingColorKeys.length, orbStates.orbStateColorKeys.length,
+      `${style}: 思考态颜色变化不完整`);
     assert.equal(idleParams.edgeGlow, 0, `${style}: 空闲态默认外发光必须为 0`);
     assert.equal(thinkingParams.edgeGlow, 0, `${style}: 思考态默认外发光必须为 0`);
 
@@ -193,33 +230,79 @@ try {
       assert.equal(swiftSeeds[state][19], 1, `${style}/${state}: Swift 默认玻璃罩未开启`);
     }
 
-    const transition = orbStates.createOrbTransitionController({
-      state: "thinking",
-      params: thinkingParams,
+    const target = (state) => ({
+      state,
+      params: state === "thinking" ? thinkingParams : idleParams,
+      activationDuration: configuration.activationDuration,
       transitionDuration: configuration.transitionDuration,
     });
-    const transitionStart = transition.sample({
-      state: "idle",
-      params: idleParams,
-      transitionDuration: configuration.transitionDuration,
-    }, 100);
-    assert.deepEqual(transitionStart, thinkingParams, `${style}: 状态切换起点不连续`);
-    const halfwayAt = 100 + configuration.transitionDuration * 500;
-    const halfway = transition.sample({
-      state: "idle",
-      params: idleParams,
-      transitionDuration: configuration.transitionDuration,
-    }, halfwayAt);
-    assert.notEqual(halfway.speed, thinkingParams.speed, `${style}: 过渡中点没有开始变化`);
-    assert.notEqual(halfway.speed, idleParams.speed, `${style}: 过渡中点提前到达终值`);
-    const interrupted = transition.sample({
-      state: "thinking",
-      params: thinkingParams,
-      transitionDuration: configuration.transitionDuration,
-    }, halfwayAt);
+    const cycle = orbStates.createOrbTransitionController(target("idle"));
+    const activationStartedAt = 100;
+    const activationStart = cycle.sample(target("thinking"), activationStartedAt);
+    assert.deepEqual(activationStart, idleParams, `${style}: 进入思考态时没有从当前空闲画面开始`);
+    const activationHalfwayAt = activationStartedAt + configuration.activationDuration * 500;
+    const activationHalfway = cycle.sample(target("thinking"), activationHalfwayAt);
     assert.ok(
-      Math.abs(interrupted.speed - halfway.speed) < 0.000001,
-      `${style}: 反向切换产生数值跳变`,
+      activationHalfway.speed > idleParams.speed
+        && activationHalfway.speed < thinkingParams.speed,
+      `${style}: 空闲进入思考态的中间过程缺失`,
+    );
+    const activatedAt = activationStartedAt + configuration.activationDuration * 1000 + 1;
+    const activated = cycle.sample(target("thinking"), activatedAt);
+    assert.deepEqual(activated, thinkingParams, `${style}: 进入思考态后没有精确到达目标`);
+
+    const settleStartedAt = activatedAt + 100;
+    const settleStart = cycle.sample(target("idle"), settleStartedAt);
+    assert.deepEqual(settleStart, thinkingParams, `${style}: 回到空闲态时产生数值跳变`);
+    const settleHalfwayAt = settleStartedAt + configuration.transitionDuration * 500;
+    const settleHalfway = cycle.sample(target("idle"), settleHalfwayAt);
+    assert.ok(
+      settleHalfway.speed > idleParams.speed && settleHalfway.speed < thinkingParams.speed,
+      `${style}: 思考回落空闲态的中间过程缺失`,
+    );
+    const settledAt = settleStartedAt + configuration.transitionDuration * 1000 + 1;
+    const settled = cycle.sample(target("idle"), settledAt);
+    assert.deepEqual(settled, idleParams, `${style}: 回落结束后没有精确进入空闲态`);
+
+    const reactivationStart = cycle.sample(target("thinking"), settledAt + 100);
+    assert.deepEqual(reactivationStart, idleParams, `${style}: 第二次进入思考态没有从空闲画面开始`);
+    const reactivated = cycle.sample(
+      target("thinking"),
+      settledAt + 101 + configuration.activationDuration * 1000,
+    );
+    assert.deepEqual(reactivated, thinkingParams, `${style}: 第二次进入思考态失败`);
+
+    const interrupted = orbStates.createOrbTransitionController(target("thinking"));
+    interrupted.sample(target("idle"), 100);
+    const interruptedAt = 100 + configuration.transitionDuration * 500;
+    const interruptedFrame = interrupted.sample(target("idle"), interruptedAt);
+    const resumedFrame = interrupted.sample(target("thinking"), interruptedAt);
+    assert.deepEqual(resumedFrame, interruptedFrame, `${style}: 中断回落时画面发生跳变`);
+    const resumedThinking = interrupted.sample(
+      target("thinking"),
+      interruptedAt + configuration.activationDuration * 1000 + 1,
+    );
+    assert.deepEqual(resumedThinking, thinkingParams, `${style}: 回落中重新进入思考态失败`);
+
+    assert.match(
+      webCode,
+      /fromUniforms = new Float32Array\(displayedUniforms\)[\s\S]*?transitionTargetState = nextState[\s\S]*?activeTransitionDuration = nextState === "thinking"[\s\S]*?\? activationDurationMs[\s\S]*?: settleDurationMs/,
+      `${style}: Web 导出缺少双向状态过渡`,
+    );
+    assert.match(
+      swiftCode,
+      /fromUniforms = sampleTransition\(at: now\)[\s\S]*?transitionTargetState = state[\s\S]*?activeTransitionDuration = state == \.thinking[\s\S]*?\? orbActivationDuration[\s\S]*?: orbSettleDuration/,
+      `${style}: Swift 导出缺少双向状态过渡`,
+    );
+    assert.match(
+      webCode,
+      /motionPhase \+= frameDelta \* Math\.max\(values\[3\], 0\)[\s\S]*?values\[2\] = motionPhase \/ Math\.max\(values\[3\], 0\.001\)/,
+      `${style}: Web 导出未保持运动相位连续`,
+    );
+    assert.match(
+      swiftCode,
+      /motionPhase \+= frameDelta \* CFTimeInterval\(max\(uniforms\[3\], 0\)\)[\s\S]*?uniforms\[2\] = Float\(motionPhase \/ CFTimeInterval\(max\(uniforms\[3\], 0\.001\)\)\)/,
+      `${style}: Swift 导出未保持运动相位连续`,
     );
 
     const webSeed = webSeeds.thinking;
@@ -260,6 +343,103 @@ try {
       assert.ok(loopDuration >= 11.5 && loopDuration <= 13, "色差金属默认循环时长偏离参考视频");
     }
 
+    if (style === "particleRibbon") {
+      const ribbonUniforms = [
+        [32, "particleDensity", "粒子密度"],
+        [33, "ribbonCount", "丝带层数"],
+        [34, "ribbonWidth", "丝带宽度"],
+        [35, "ribbonTwist", "扭转强度"],
+        [36, "ribbonFold", "折叠幅度"],
+        [37, "ribbonBreath", "呼吸幅度"],
+        [38, "particleSize", "粒子尺寸"],
+        [39, "particleBloom", "粒子辉光"],
+      ];
+      for (const [index, key, label] of ribbonUniforms) {
+        assert.ok(
+          Math.abs(webSeed[index] - thinkingParams[key]) < 0.000001,
+          `量子丝带：${label}未写入 uniform`,
+        );
+        assert.match(wgsl, new RegExp(`\\b${key}:\\s+f32`), `WGSL 缺少 ${label} 参数`);
+        assert.match(metal, new RegExp(`float ${key};`), `Metal 缺少 ${label} 参数`);
+      }
+      assert.match(shaderModule.orbShaderSource, /fn ribbon_vs_main\(/, "WGSL 粒子顶点入口缺失");
+      assert.match(shaderModule.orbShaderSource, /fn ribbon_fs_main\(/, "WGSL 粒子片元入口缺失");
+      assert.match(
+        shaderModule.orbShaderSource,
+        /canvasParticleScale = clamp\(minSize \/ 640\.0, 0\.22, 1\.0\)/,
+        "WGSL 粒子尺寸未适配小画布",
+      );
+      assert.match(
+        shaderModule.orbShaderSource,
+        /@group\(0\) @binding\(1\) var ribbonTexture: texture_2d<f32>/,
+        "WGSL 粒子离屏纹理绑定缺失",
+      );
+      assert.match(
+        shaderModule.orbShaderSource,
+        /fn ribbon_composite_fs_main\([\s\S]*?refractedP = p - normal \* refractionAmount/,
+        "WGSL 玻璃复合入口未使用法线折射",
+      );
+      assert.match(
+        shaderModule.orbShaderSource,
+        /textureSampleLevel[\s\S]*?redSample[\s\S]*?greenSample[\s\S]*?blueSample/,
+        "WGSL 玻璃复合未执行 RGB 色散采样",
+      );
+      assert.match(wgsl, /particleGlassOverlay = s == 24/, "WGSL 粒子玻璃覆盖层缺失");
+      assert.match(metal, /vertex ribbon_vs_mainOutput ribbon_vs_main\(/, "Metal 粒子顶点入口缺失");
+      assert.match(metal, /fragment ribbon_fs_mainOutput ribbon_fs_main\(/, "Metal 粒子片元入口缺失");
+      assert.match(
+        metal,
+        /canvasParticleScale = metal::clamp\(minSize \/ 640\.0, 0\.22, 1\.0\)/,
+        "Metal 粒子尺寸未适配小画布",
+      );
+      assert.match(
+        metal,
+        /metal::texture2d<float> ribbonTexture \[\[texture\(0\)\]\]/,
+        "Metal 粒子离屏纹理绑定缺失",
+      );
+      assert.match(
+        metal,
+        /fragment ribbon_composite_fs_mainOutput ribbon_composite_fs_main\([\s\S]*?refractedP = p - normal \* refractionAmount/,
+        "Metal 玻璃复合入口未使用法线折射",
+      );
+      assert.match(
+        metal,
+        /redSample = ribbonTexture\.sample[\s\S]*?greenSample = ribbonTexture\.sample[\s\S]*?blueSample = ribbonTexture\.sample/,
+        "Metal 玻璃复合未执行 RGB 色散采样",
+      );
+      assert.match(metal, /particleGlassOverlay = s == 24/, "Metal 粒子玻璃覆盖层缺失");
+      assert.ok(
+        idleParams.ribbonBreath < thinkingParams.ribbonBreath,
+        "量子丝带空闲态呼吸幅度应低于思考态",
+      );
+      assert.ok(
+        idleParams.ribbonFold < thinkingParams.ribbonFold,
+        "量子丝带空闲态折叠幅度应低于思考态",
+      );
+      assert.match(
+        webCode,
+        /usage: GPUTextureUsage\.RENDER_ATTACHMENT \| GPUTextureUsage\.TEXTURE_BINDING/,
+        "Web 导出未创建可采样的粒子离屏纹理",
+      );
+      assert.match(
+        webCode,
+        /particlePass\.draw\(6, ribbonInstanceCount\)[\s\S]*?pass\.setPipeline\(ribbonCompositePipeline\)/,
+        "Web 导出未先渲染粒子纹理再执行玻璃复合",
+      );
+      assert.match(
+        swiftCode,
+        /descriptor\.usage = \[\.renderTarget, \.shaderRead\]/,
+        "Swift 导出未创建可采样的粒子离屏纹理",
+      );
+      assert.match(
+        swiftCode,
+        /vertexCount: 6,[\s\S]*?instanceCount: orbRibbonInstanceCount[\s\S]*?encoder\.setRenderPipelineState\(isParticleRibbon \? ribbonCompositePipeline : pipeline\)[\s\S]*?encoder\.setFragmentTexture\(ribbonTexture, index: 0\)/,
+        "Swift 导出未先渲染粒子纹理再执行玻璃复合",
+      );
+      assert.doesNotMatch(shaderModule.orbShaderSource, /lensParticle/, "WGSL 仍残留粒子副像伪折射");
+      assert.doesNotMatch(metal, /lensParticle/, "Metal 仍残留粒子副像伪折射");
+    }
+
     const webShaderMatch = webCode.match(/^    const shaderSource = (.+);$/m);
     assert.ok(webShaderMatch, `${style}: Web shader 源码缺失`);
     assert.equal(JSON.parse(webShaderMatch[1]), shaderModule.orbShaderSource);
@@ -291,6 +471,12 @@ try {
     assert.match(swiftCode, /public enum LiquidOrbState/, `${style}: Swift 状态类型缺失`);
     assert.match(swiftCode, /public init\(state: LiquidOrbState = \.thinking\)/, `${style}: Swift 初始状态不一致`);
   }
+
+  assert.match(
+    rendererSource,
+    /motionPhase \+= frameDelta \* Math\.max\(params\.speed, 0\)[\s\S]*?shaderTime = motionPhase \/ Math\.max\(params\.speed, 0\.001\)/,
+    "编辑器状态切换没有保持运动相位连续",
+  );
 
   const adjustedMetal = {
     style: "chromaticMetal",

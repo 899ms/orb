@@ -10,6 +10,7 @@ export type StyleName =
   | "blueDrop"
   | "violetEmber"
   | "refractiveBlob"
+  | "particleRibbon"
   | "chromaticMetal";
 
 export type OrbParams = {
@@ -28,6 +29,14 @@ export type OrbParams = {
   metalEvolution: number;
   metalRoughness: number;
   metalDepth: number;
+  particleDensity: number;
+  ribbonCount: number;
+  ribbonWidth: number;
+  ribbonTwist: number;
+  ribbonFold: number;
+  ribbonBreath: number;
+  particleSize: number;
+  particleBloom: number;
   zoom: number;
   warp: number;
   ridgeAmt: number;
@@ -77,6 +86,14 @@ const basePreset: StylePreset = {
   metalEvolution: 1,
   metalRoughness: 0.22,
   metalDepth: 0.25,
+  particleDensity: 0.72,
+  ribbonCount: 5,
+  ribbonWidth: 0.42,
+  ribbonTwist: 1.25,
+  ribbonFold: 0.55,
+  ribbonBreath: 0.3,
+  particleSize: 1.2,
+  particleBloom: 0.7,
   zoom: 0.3,
   warp: 3,
   ridgeAmt: 0.5,
@@ -371,6 +388,39 @@ export const stylePresets: Record<StyleName, StylePreset> = {
     canvasColor: "#050208",
     glowColor: "#B18CFF",
   },
+  particleRibbon: {
+    ...basePreset,
+    glassEnabled: true,
+    speed: 0.72,
+    radius: 0.66,
+    particleDensity: 1,
+    ribbonCount: 4,
+    ribbonWidth: 0.48,
+    ribbonTwist: 1.15,
+    ribbonFold: 0.6,
+    ribbonBreath: 0.38,
+    particleSize: 1.12,
+    particleBloom: 1.22,
+    shade: 0.12,
+    sheen: 0.28,
+    gloss: 0.24,
+    glassOpacity: 0.44,
+    shellMidAlpha: 0.18,
+    shellEdgeAlpha: 0.18,
+    exposure: 1.48,
+    colorA: "#63F1FF",
+    colorB: "#4A9DFF",
+    colorC: "#8566FF",
+    colorD: "#F15DE1",
+    highlightColor: "#F5FBFF",
+    shellInner: "#FFFFFF",
+    shellMid: "#9BF4FF",
+    shellEdge: "#C5A9FF",
+    sheenColor: "#EAF4FF",
+    specColor: "#DCEAFF",
+    canvasColor: "#010208",
+    glowColor: "#765CFF",
+  },
   chromaticMetal: {
     ...basePreset,
     speed: 1.12,
@@ -410,6 +460,7 @@ export const stylePresets: Record<StyleName, StylePreset> = {
 export const styleNames: readonly StyleName[] = [
   "siri",
   "voiceWave",
+  "particleRibbon",
   "blueDrop",
   "violetEmber",
   "refractiveBlob",
@@ -434,6 +485,7 @@ export const styleFlowIndexes: Record<StyleName, number> = {
   blueDrop: 20,
   violetEmber: 21,
   refractiveBlob: 23,
+  particleRibbon: 24,
   chromaticMetal: 22,
 };
 

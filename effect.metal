@@ -44,6 +44,14 @@ struct Uniforms {
     float metalEvolution;
     float metalRoughness;
     float metalDepth;
+    float particleDensity;
+    float ribbonCount;
+    float ribbonWidth;
+    float ribbonTwist;
+    float ribbonFold;
+    float ribbonBreath;
+    float particleSize;
+    float particleBloom;
     metal::float4 colorA;
     metal::float4 colorB;
     metal::float4 colorC;
@@ -1208,6 +1216,14 @@ metal::float3 glsRefractiveBlobFluid(
     return glsFinishPresetFluid(color, p, u);
 }
 
+metal::float3 glsParticleRibbonFluid(
+    metal::float2 p,
+    float t,
+    constant Uniforms& u
+) {
+    return metal::float3(0.0);
+}
+
 metal::float3 glsPresetFluid(
     metal::float2 p_16,
     int style,
@@ -1257,6 +1273,9 @@ metal::float3 glsPresetFluid(
     }
     if (style == 23) {
         return glsRefractiveBlobFluid(p_16, t_13, u);
+    }
+    if (style == 24) {
+        return glsParticleRibbonFluid(p_16, t_13, u);
     }
     metal::float3 _e27 = glsFrostFluid(p_16, t_13, u);
     return _e27;
@@ -1494,7 +1513,7 @@ metal::float4 orbGlassLiquidAnim(
     float rad = metal::max(u.radius, 0.05);
     float t = u.time * u.speed;
     int s = naga_f2i32(u.style + 0.5);
-    bool emissionOnly = u.glassEnabled <= 0.5 && (s == 9 || s == 14);
+    bool emissionOnly = u.glassEnabled <= 0.5 && (s == 9 || s == 14 || s == 24);
     float contourRad = rad * glsContourScale(uv, t, u.contourDeform, u);
 
     if (metal::length(uv) > contourRad * (1.01 + mfEdgeD(u.edgeSoftness))) {
@@ -1549,7 +1568,10 @@ metal::float4 orbGlassLiquidAnim(
     metal::float3 clearSat = metal::clamp(
         metal::float3(lum) + (fcol - metal::float3(lum)) * 1.22,
         metal::float3(0.0), metal::float3(1.0));
-    metal::float3 col = glsOver(u.canvasColor.xyz, clearSat, 0.99 * clearFa);
+    bool particleGlassOverlay = s == 24;
+    metal::float3 col = particleGlassOverlay
+        ? metal::float3(0.0)
+        : glsOver(u.canvasColor.xyz, clearSat, 0.99 * clearFa);
     if (emissionOnly) {
         float signal = metal::max(clearSat.x, metal::max(clearSat.y, clearSat.z));
         float emissionCoverage = metal::smoothstep(0.025, 0.16, signal);
@@ -1557,10 +1579,15 @@ metal::float4 orbGlassLiquidAnim(
     }
 
     if (u.glassEnabled > 0.5) {
-        float surfaceWidth = 0.026 + 0.055 * metal::clamp(u.shellEdgeAlpha, 0.0, 1.0);
+        float surfaceWidth = particleGlassOverlay
+            ? 0.09 + 0.12 * metal::clamp(u.shellEdgeAlpha, 0.0, 1.0)
+            : 0.026 + 0.055 * metal::clamp(u.shellEdgeAlpha, 0.0, 1.0);
         float surfaceBand = (1.0 - metal::smoothstep(0.0, surfaceWidth, edgeDepth)) * clearFa;
-        float opticalRim = metal::pow(surfaceBand, 1.8);
-        col = glsOver(col, u.shellInner.xyz, opticalRim * u.glassOpacity * 0.45);
+        float opticalRim = metal::pow(surfaceBand, particleGlassOverlay ? 1.3 : 1.8);
+        float innerRimAlpha = !particleGlassOverlay
+            ? opticalRim * u.glassOpacity * 0.45
+            : opticalRim * u.glassOpacity * 0.14;
+        col = glsOver(col, u.shellInner.xyz, innerRimAlpha);
 
         metal::float2 coolDirection = metal::normalize(metal::float2(0.84, 0.54));
         metal::float2 warmDirection = metal::normalize(metal::float2(-0.62, -0.78));
@@ -1597,7 +1624,9 @@ metal::float4 orbGlassLiquidAnim(
         edged, metal::float3(0.0), metal::float3(1.0));
     float emissionAlpha = metal::max(finalColor.x, metal::max(finalColor.y, finalColor.z));
     float sphereAlpha = metal::clamp(metal::max(ballA, emissionAlpha), 0.0, 1.0);
-    float finalAlpha = emissionOnly ? emissionAlpha : sphereAlpha;
+    float finalAlpha = (emissionOnly || particleGlassOverlay)
+        ? emissionAlpha
+        : sphereAlpha;
     return metal::float4(finalColor, finalAlpha);
 }
 
@@ -1658,4 +1687,261 @@ fragment fs_mainOutput fs_main(
     float fitStart = metal::min(metal::mix(contourRad_1, fitEnd, 0.5), fitEnd - fitFeather);
     float fit = 1.0 - metal::smoothstep(fitStart, fitEnd, metal::max(metal::abs(q_12.x), metal::abs(q_12.y)));
     return fs_mainOutput { metal::float4(_e2.xyz * fit, _e2.w * fit) };
+}
+
+constant uint PR_U_SEGMENTS = 384;
+constant uint PR_V_SEGMENTS = 96;
+constant uint PR_PARTICLES_PER_LAYER = PR_U_SEGMENTS * PR_V_SEGMENTS;
+
+float prHash(float value) {
+    return metal::fract(metal::sin(value * 12.9898 + 78.233) * 43758.5453);
+}
+
+metal::float3 prRotateX(metal::float3 p, float angle) {
+    float c = metal::cos(angle);
+    float s = metal::sin(angle);
+    return metal::float3(p.x, c * p.y - s * p.z, s * p.y + c * p.z);
+}
+
+metal::float3 prRotateY(metal::float3 p, float angle) {
+    float c = metal::cos(angle);
+    float s = metal::sin(angle);
+    return metal::float3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z);
+}
+
+metal::float3 prCurve(
+    float theta,
+    float layer,
+    float phase,
+    constant Uniforms& u
+) {
+    float local = theta + layer * 0.11;
+    float foldPhase = 2.0 * local + phase * (0.72 + layer * 0.025);
+    float fold = metal::clamp(u.ribbonFold, 0.0, 1.2);
+    float radial = 0.4 + (0.085 + fold * 0.04) * metal::cos(foldPhase);
+    float orbit = local + phase * 0.13
+                + metal::sin(local - phase * 0.22 + layer) * fold * 0.13;
+    float vertical = (0.235 + fold * 0.085) * metal::sin(foldPhase)
+                   + 0.055 * metal::sin(local * 3.0 - phase * 0.46 + layer * 0.7);
+    return metal::float3(radial * metal::cos(orbit), vertical, radial * metal::sin(orbit));
+}
+
+metal::float3 prPalette(float valueIn, constant Uniforms& u) {
+    float value = metal::fract(valueIn) * 4.0;
+    if (value < 1.0) return metal::mix(u.colorA.xyz, u.colorB.xyz, value);
+    if (value < 2.0) return metal::mix(u.colorB.xyz, u.colorC.xyz, value - 1.0);
+    if (value < 3.0) return metal::mix(u.colorC.xyz, u.colorD.xyz, value - 2.0);
+    return metal::mix(u.colorD.xyz, u.colorA.xyz, value - 3.0);
+}
+
+struct ribbon_vs_mainOutput {
+    metal::float4 pos [[position]];
+    metal::float2 local [[user(loc0), center_no_perspective]];
+    metal::float3 color [[user(loc1), center_perspective]];
+    float opacity [[user(loc2), center_perspective]];
+};
+
+vertex ribbon_vs_mainOutput ribbon_vs_main(
+    uint vertexIndex [[vertex_id]],
+    uint instanceIndex [[instance_id]],
+    constant Uniforms& u [[buffer(0)]]
+) {
+    const metal::float2 corners[6] = {
+        metal::float2(-1.0, -1.0), metal::float2(1.0, -1.0),
+        metal::float2(-1.0, 1.0), metal::float2(-1.0, 1.0),
+        metal::float2(1.0, -1.0), metal::float2(1.0, 1.0)
+    };
+    uint layerIndex = instanceIndex / PR_PARTICLES_PER_LAYER;
+    uint particleIndex = instanceIndex % PR_PARTICLES_PER_LAYER;
+    uint uIndex = particleIndex / PR_V_SEGMENTS;
+    uint vIndex = particleIndex % PR_V_SEGMENTS;
+    float layer = float(layerIndex);
+    float random = prHash(float(instanceIndex));
+    bool activeLayer = layer < metal::floor(metal::clamp(u.ribbonCount, 2.0, 6.0) + 0.5);
+
+    float uCoord = (float(uIndex) + prHash(float(instanceIndex) + 11.0) * 0.56)
+                 / float(PR_U_SEGMENTS);
+    float vCoord = (float(vIndex) + prHash(float(instanceIndex) + 29.0) * 0.46)
+                 / float(PR_V_SEGMENTS);
+    float strip = vCoord * 2.0 - 1.0;
+    float t = u.time * u.speed;
+    float phase = t * 0.48;
+    float arc = metal::fract(uCoord + layer * 0.211 - phase * 0.019);
+    float arcLength = 0.76 + 0.055 * metal::sin(t * 0.23 + layer * 1.71);
+    float arcPosition = arc / arcLength;
+    float arcEnvelope = metal::smoothstep(0.0, 0.075, arcPosition)
+                      * (1.0 - metal::smoothstep(0.88, 1.0, arcPosition));
+    bool active = activeLayer
+               && arc <= arcLength
+               && random <= metal::clamp(u.particleDensity, 0.2, 1.0);
+    float theta = uCoord * 6.28318530718;
+    metal::float3 center = prCurve(theta, layer, phase, u);
+    metal::float3 ahead = prCurve(theta + 0.006, layer, phase, u);
+    metal::float3 tangent = metal::normalize(ahead - center);
+    metal::float3 radial = metal::normalize(center + metal::float3(0.001, 0.013, 0.007));
+    metal::float3 side = metal::normalize(metal::cross(tangent, radial));
+    metal::float3 surfaceNormal = metal::normalize(metal::cross(side, tangent));
+    float twist = theta * (0.72 + u.ribbonTwist * 0.58)
+                + phase * 0.74 + layer * 1.17;
+    metal::float3 ribbonDirection = metal::normalize(
+        side * metal::cos(twist) + surfaceNormal * metal::sin(twist));
+    float widthEnvelope = (0.72 + 0.28
+        * metal::pow(metal::sin(theta * 1.5 + phase + layer), 2.0))
+        * metal::mix(0.42, 1.0, metal::sqrt(metal::max(arcEnvelope, 0.0)));
+    metal::float3 position = center
+        + ribbonDirection * strip * u.ribbonWidth * 0.5 * widthEnvelope;
+
+    float pulse = metal::sin(t * 0.73 + layer * 1.71)
+                + 0.44 * metal::sin(t * 1.17 + layer * 0.83 + 1.2);
+    position *= 1.0 + u.ribbonBreath * pulse * 0.16;
+    float layerCenter = layer
+        - (metal::floor(metal::clamp(u.ribbonCount, 2.0, 6.0) + 0.5) - 1.0) * 0.5;
+    position = prRotateY(
+        position, layerCenter * 0.24 + metal::sin(t * 0.19 + layer * 1.3) * 0.055);
+    position = prRotateX(
+        position, layerCenter * 0.14 + metal::cos(t * 0.17 + layer * 0.9) * 0.04);
+    position = prRotateY(position, t * 0.105 + metal::sin(t * 0.21) * 0.11);
+    position = prRotateX(position, -0.2 + metal::sin(t * 0.16 + layer * 0.1) * 0.16);
+
+    float minSize = metal::max(metal::min(u.size.x, u.size.y), 1.0);
+    float depthScale = 0.88 + position.z * 0.16;
+    metal::float2 orbPosition = position.xy * u.radius * 1.45 * depthScale;
+    metal::float2 clip = metal::float2(
+        orbPosition.x * minSize / metal::max(u.size.x, 1.0),
+        orbPosition.y * minSize / metal::max(u.size.y, 1.0));
+    float canvasParticleScale = metal::clamp(minSize / 640.0, 0.22, 1.0);
+    float pointPixels = metal::max(0.6, u.particleSize)
+                      * (1.5 + u.particleBloom * 2.5)
+                      * (0.92 + position.z * 0.18)
+                      * canvasParticleScale;
+    metal::float2 corner = corners[vertexIndex];
+    metal::float2 pointOffset = corner * pointPixels * 2.0
+                              / metal::max(u.size, metal::float2(1.0));
+
+    float colorPhase = uCoord * 0.32 + layer * 0.19 + phase * 0.025
+                     + position.z * 0.08;
+    float stripEdge = metal::smoothstep(0.58, 1.0, metal::abs(strip));
+    float front = metal::clamp(0.78 + position.z * 0.54, 0.5, 1.24);
+    float baseOpacity = metal::mix(0.025, 0.009,
+        metal::clamp(u.shade / 1.5, 0.0, 1.0));
+
+    ribbon_vs_mainOutput out;
+    out.pos = active
+        ? metal::float4(clip + pointOffset,
+                        metal::clamp(0.5 - position.z * 0.12, 0.05, 0.95), 1.0)
+        : metal::float4(2.0, 2.0, 1.0, 1.0);
+    out.local = corner;
+    out.color = metal::pow(
+        metal::mix(prPalette(colorPhase, u), u.highlightColor.xyz, stripEdge * 0.56),
+        metal::float3(0.72)) * front;
+    out.opacity = active
+        ? baseOpacity
+            * (0.72 + stripEdge * 1.28)
+            * arcEnvelope
+            * metal::pow(canvasParticleScale, 1.35)
+        : 0.0;
+    return out;
+}
+
+struct ribbon_fs_mainOutput {
+    metal::float4 color [[color(0)]];
+};
+
+fragment ribbon_fs_mainOutput ribbon_fs_main(
+    ribbon_vs_mainOutput in [[stage_in]],
+    constant Uniforms& u [[buffer(0)]]
+) {
+    float distanceSquared = metal::dot(in.local, in.local);
+    if (distanceSquared > 1.0) discard_fragment();
+    float core = metal::exp(-distanceSquared * 4.8);
+    float halo = metal::exp(-distanceSquared * 1.35);
+    float bloom = metal::clamp(u.particleBloom, 0.0, 2.0);
+    float intensity = in.opacity * (core * 1.9 + halo * bloom * 0.72)
+                    * metal::max(u.exposure, 0.0);
+    float glowMix = metal::clamp((halo - core * 0.45)
+        * (0.18 + u.edgeGlow * 0.5), 0.0, 0.7);
+    metal::float3 color = metal::mix(in.color, u.glowColor.xyz, glowMix);
+    float alpha = metal::clamp(intensity, 0.0, 1.0);
+    return ribbon_fs_mainOutput { metal::float4(color * alpha, alpha) };
+}
+
+metal::float2 prTextureUvFromOrb(
+    metal::float2 p,
+    float contourRad,
+    constant Uniforms& u
+) {
+    float minSize = metal::max(metal::min(u.size.x, u.size.y), 1.0);
+    metal::float2 fc = (p * contourRad * minSize + u.size) * 0.5;
+    return metal::clamp(
+        metal::float2(
+            fc.x / metal::max(u.size.x, 1.0),
+            1.0 - fc.y / metal::max(u.size.y, 1.0)),
+        metal::float2(0.0),
+        metal::float2(1.0));
+}
+
+struct ribbon_composite_fs_mainOutput {
+    metal::float4 color [[color(0)]];
+};
+
+fragment ribbon_composite_fs_mainOutput ribbon_composite_fs_main(
+    fs_mainInput in [[stage_in]],
+    metal::float4 position [[position]],
+    constant Uniforms& u [[buffer(0)]],
+    metal::texture2d<float> ribbonTexture [[texture(0)]]
+) {
+    constexpr metal::sampler ribbonSampler(
+        metal::coord::normalized,
+        metal::address::clamp_to_edge,
+        metal::filter::linear);
+    metal::float4 direct = ribbonTexture.sample(ribbonSampler, in.uv);
+    if (u.glassEnabled <= 0.5) {
+        return ribbon_composite_fs_mainOutput { direct };
+    }
+
+    metal::float2 fc = metal::float2(in.uv.x, 1.0 - in.uv.y) * u.size;
+    float minSize = metal::max(metal::min(u.size.x, u.size.y), 1.0);
+    metal::float2 uv = (2.0 * fc - u.size) / minSize;
+    float rad = metal::max(u.radius, 0.05);
+    float t = u.time * u.speed;
+    float contourRad = rad * glsContourScale(uv, t, u.contourDeform, u);
+    metal::float4 shell = orbGlassLiquidAnim(in.uv, u);
+    if (metal::length(uv) > contourRad * (1.01 + mfEdgeD(u.edgeSoftness))) {
+        return ribbon_composite_fs_mainOutput { shell };
+    }
+
+    metal::float2 p = uv / contourRad;
+    float pd = metal::length(p);
+    float clearFa = 1.0 - metal::smoothstep(GL_CLEAR_EA, GL_CLEAR_EB, pd);
+    metal::float2 normal = glsContourNormal(uv, rad, t, u.contourDeform, u);
+    float edgeDepth = metal::max(1.0 - pd, 0.0);
+    float refractionWidth = 0.015 + 0.95 * metal::clamp(u.shellMidAlpha, 0.0, 1.0);
+    float refractionT = edgeDepth / metal::max(refractionWidth, 0.001);
+    float refractionProfile = metal::pow(glsRefractionProfile(refractionT), 0.68);
+    float refractionAmount = 1.6 * metal::clamp(u.glassOpacity, 0.0, 1.0)
+                           * refractionProfile;
+    metal::float2 refractedP = p - normal * refractionAmount;
+    float channelSplit = 0.14 * metal::clamp(u.gloss, 0.0, 2.0)
+                       * metal::clamp(u.glassOpacity, 0.0, 1.0)
+                       * refractionProfile;
+    metal::float4 redSample = ribbonTexture.sample(
+        ribbonSampler,
+        prTextureUvFromOrb(refractedP - normal * channelSplit, contourRad, u));
+    metal::float4 greenSample = ribbonTexture.sample(
+        ribbonSampler,
+        prTextureUvFromOrb(refractedP, contourRad, u));
+    metal::float4 blueSample = ribbonTexture.sample(
+        ribbonSampler,
+        prTextureUvFromOrb(refractedP + normal * channelSplit, contourRad, u));
+    float refractedAlpha = metal::max(
+        redSample.w,
+        metal::max(greenSample.w, blueSample.w)) * clearFa;
+    metal::float4 refracted = metal::float4(
+        metal::float3(redSample.x, greenSample.y, blueSample.z) * clearFa,
+        refractedAlpha);
+    return ribbon_composite_fs_mainOutput {
+        metal::float4(
+            shell.xyz + refracted.xyz * (1.0 - shell.w),
+            shell.w + refracted.w * (1.0 - shell.w))
+    };
 }

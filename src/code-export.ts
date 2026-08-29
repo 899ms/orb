@@ -1,5 +1,7 @@
 import orbMetalSource from "../effect.metal?raw";
-import { createOrbUniformSnapshot } from "./orb-uniforms";
+import { createOrbUniformSnapshot, orbColorOffset } from "./orb-uniforms";
+import { particleRibbonInstanceCount } from "./particle-ribbon";
+import { styleFlowIndexes } from "./presets";
 import {
   resolveOrbStateParams,
   type OrbStateConfiguration,
@@ -49,18 +51,25 @@ export function createWebExport(
   <script type="module">
     const shaderSource = ${shaderLiteral};
     const stateSeeds = ${JSON.stringify(stateSeeds)};
-    const transitionDurationMs = ${configuration.transitionDuration * 1000};
+    const ribbonStyleIndex = ${styleFlowIndexes.particleRibbon};
+    const ribbonInstanceCount = ${particleRibbonInstanceCount};
+    const activationDurationMs = ${configuration.activationDuration * 1000};
+    const settleDurationMs = ${configuration.transitionDuration * 1000};
     const canvas = document.querySelector("#orb");
     const status = document.querySelector("#status");
     let animationFrame = 0;
     let device = null;
+    let ribbonTarget = null;
     let stopped = false;
     let state = ${JSON.stringify(initialState)};
+    let transitionTargetState = state;
     let fromUniforms = new Float32Array(stateSeeds[state]);
     let targetUniforms = new Float32Array(stateSeeds[state]);
     const displayedUniforms = new Float32Array(stateSeeds[state]);
     let transitionStartedAt = 0;
     let activeTransitionDuration = 0;
+    let lastFrameAt = null;
+    let motionPhase = 0;
 
     function srgbToLinear(value) {
       return value <= 0.04045
@@ -83,13 +92,16 @@ export function createWebExport(
     function transitionProgress(now) {
       if (activeTransitionDuration === 0) return 1;
       const raw = Math.min(1, Math.max(0, (now - transitionStartedAt) / activeTransitionDuration));
-      return raw * raw * (3 - 2 * raw);
+      return transitionTargetState === "thinking"
+        ? 1 - (1 - raw) ** 3
+        : raw * raw * (3 - 2 * raw);
     }
 
     function sampleTransition(now) {
       const progress = transitionProgress(now);
       for (let index = 3; index < displayedUniforms.length; index += 1) {
-        const colorComponent = index >= 32 && (index - 32) % 4 < 3;
+        const colorComponent = index >= ${orbColorOffset}
+          && (index - ${orbColorOffset}) % 4 < 3;
         displayedUniforms[index] = colorComponent
           ? mixSrgb(fromUniforms[index], targetUniforms[index], progress)
           : fromUniforms[index] + (targetUniforms[index] - fromUniforms[index]) * progress;
@@ -107,8 +119,11 @@ export function createWebExport(
       sampleTransition(now);
       fromUniforms = new Float32Array(displayedUniforms);
       targetUniforms = new Float32Array(stateSeeds[nextState]);
+      transitionTargetState = nextState;
       transitionStartedAt = now;
-      activeTransitionDuration = transitionDurationMs;
+      activeTransitionDuration = nextState === "thinking"
+        ? activationDurationMs
+        : settleDurationMs;
       state = nextState;
     }
 
@@ -123,6 +138,7 @@ export function createWebExport(
       if (stopped) return;
       stopped = true;
       cancelAnimationFrame(animationFrame);
+      ribbonTarget?.destroy();
       device?.destroy();
       status.hidden = false;
       status.textContent = error instanceof Error ? error.message : String(error);
@@ -149,7 +165,69 @@ export function createWebExport(
       const pipeline = device.createRenderPipeline({
         layout: "auto",
         vertex: { module: shader, entryPoint: "vs_main" },
-        fragment: { module: shader, entryPoint: "fs_main", targets: [{ format }] },
+        fragment: {
+          module: shader,
+          entryPoint: "fs_main",
+          targets: [{
+            format,
+            blend: {
+              color: {
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add",
+              },
+              alpha: {
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add",
+              },
+            },
+          }],
+        },
+        primitive: { topology: "triangle-list" },
+      });
+      const ribbonPipeline = device.createRenderPipeline({
+        layout: "auto",
+        vertex: { module: shader, entryPoint: "ribbon_vs_main" },
+        fragment: {
+          module: shader,
+          entryPoint: "ribbon_fs_main",
+          targets: [{
+            format,
+            blend: {
+              color: { srcFactor: "one", dstFactor: "one", operation: "add" },
+              alpha: {
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add",
+              },
+            },
+          }],
+        },
+        primitive: { topology: "triangle-list" },
+      });
+      const ribbonCompositePipeline = device.createRenderPipeline({
+        layout: "auto",
+        vertex: { module: shader, entryPoint: "vs_main" },
+        fragment: {
+          module: shader,
+          entryPoint: "ribbon_composite_fs_main",
+          targets: [{
+            format,
+            blend: {
+              color: {
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add",
+              },
+              alpha: {
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add",
+              },
+            },
+          }],
+        },
         primitive: { topology: "triangle-list" },
       });
       const values = new Float32Array(displayedUniforms);
@@ -161,8 +239,17 @@ export function createWebExport(
         layout: pipeline.getBindGroupLayout(0),
         entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
       });
-      const startedAt = performance.now();
-
+      const ribbonBindGroup = device.createBindGroup({
+        layout: ribbonPipeline.getBindGroupLayout(0),
+        entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
+      });
+      const ribbonSampler = device.createSampler({
+        addressModeU: "clamp-to-edge",
+        addressModeV: "clamp-to-edge",
+        magFilter: "linear",
+        minFilter: "linear",
+      });
+      let ribbonCompositeBindGroup = null;
       device.lost.then((info) => {
         stopWithError(new Error(\`WebGPU device lost: \${info.message || info.reason}\`));
       });
@@ -180,14 +267,52 @@ export function createWebExport(
           if (canvas.width !== width || canvas.height !== height) {
             canvas.width = width;
             canvas.height = height;
+            ribbonTarget?.destroy();
+            ribbonTarget = null;
+            ribbonCompositeBindGroup = null;
           }
           values.set(sampleTransition(now));
+          const frameDelta = lastFrameAt === null
+            ? 0
+            : Math.min(0.1, Math.max(0, (now - lastFrameAt) / 1000));
+          lastFrameAt = now;
+          motionPhase += frameDelta * Math.max(values[3], 0);
           values[0] = width;
           values[1] = height;
-          values[2] = (now - startedAt) / 1000;
+          values[2] = motionPhase / Math.max(values[3], 0.001);
           device.queue.writeBuffer(uniformBuffer, 0, values);
 
+          const isParticleRibbon = Math.round(values[15]) === ribbonStyleIndex;
           const encoder = device.createCommandEncoder();
+          if (isParticleRibbon) {
+            if (!ribbonTarget || !ribbonCompositeBindGroup) {
+              ribbonTarget = device.createTexture({
+                size: { width, height },
+                format,
+                usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+              });
+              ribbonCompositeBindGroup = device.createBindGroup({
+                layout: ribbonCompositePipeline.getBindGroupLayout(0),
+                entries: [
+                  { binding: 0, resource: { buffer: uniformBuffer } },
+                  { binding: 1, resource: ribbonTarget.createView() },
+                  { binding: 2, resource: ribbonSampler },
+                ],
+              });
+            }
+            const particlePass = encoder.beginRenderPass({
+              colorAttachments: [{
+                view: ribbonTarget.createView(),
+                clearValue: { r: 0, g: 0, b: 0, a: 0 },
+                loadOp: "clear",
+                storeOp: "store",
+              }],
+            });
+            particlePass.setPipeline(ribbonPipeline);
+            particlePass.setBindGroup(0, ribbonBindGroup);
+            particlePass.draw(6, ribbonInstanceCount);
+            particlePass.end();
+          }
           const pass = encoder.beginRenderPass({
             colorAttachments: [{
               view: context.getCurrentTexture().createView(),
@@ -196,8 +321,13 @@ export function createWebExport(
               storeOp: "store",
             }],
           });
-          pass.setPipeline(pipeline);
-          pass.setBindGroup(0, bindGroup);
+          if (isParticleRibbon) {
+            pass.setPipeline(ribbonCompositePipeline);
+            pass.setBindGroup(0, ribbonCompositeBindGroup);
+          } else {
+            pass.setPipeline(pipeline);
+            pass.setBindGroup(0, bindGroup);
+          }
           pass.draw(3);
           pass.end();
           device.queue.submit([encoder.finish()]);
@@ -213,6 +343,7 @@ export function createWebExport(
     window.addEventListener("pagehide", () => {
       stopped = true;
       cancelAnimationFrame(animationFrame);
+      ribbonTarget?.destroy();
       device?.destroy();
     }, { once: true });
     start().catch((error) => {
@@ -246,7 +377,10 @@ private let orbThinkingUniformSeed: [Float] = [
 ${formatSwiftFloats(stateSeeds.thinking)}
 ]
 
-private let orbTransitionDuration: CFTimeInterval = ${configuration.transitionDuration}
+private let orbActivationDuration: CFTimeInterval = ${configuration.activationDuration}
+private let orbSettleDuration: CFTimeInterval = ${configuration.transitionDuration}
+private let orbRibbonStyleIndex: Float = ${styleFlowIndexes.particleRibbon}
+private let orbRibbonInstanceCount = ${particleRibbonInstanceCount}
 
 public enum LiquidOrbState: Sendable {
     case idle
@@ -287,9 +421,14 @@ private enum LiquidOrbError: Error {
 private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
     private let commandQueue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
-    private let startedAt = CACurrentMediaTime()
+    private let ribbonPipeline: MTLRenderPipelineState
+    private let ribbonCompositePipeline: MTLRenderPipelineState
+    private var ribbonTexture: MTLTexture?
+    private var lastFrameAt = CACurrentMediaTime()
+    private var motionPhase: CFTimeInterval = 0
     private let stateLock = NSLock()
     private var currentState: LiquidOrbState
+    private var transitionTargetState: LiquidOrbState
     private var fromUniforms: [Float]
     private var targetUniforms: [Float]
     private var displayedUniforms: [Float]
@@ -299,6 +438,7 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
     init(view: MTKView, state: LiquidOrbState) throws {
         let initialUniforms = orbUniformSeed(for: state)
         currentState = state
+        transitionTargetState = state
         fromUniforms = initialUniforms
         targetUniforms = initialUniforms
         displayedUniforms = initialUniforms
@@ -341,6 +481,39 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
         descriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
         descriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
         pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+        guard let ribbonVertex = library.makeFunction(name: "ribbon_vs_main") else {
+            throw LiquidOrbError.shaderFunctionMissing("ribbon_vs_main")
+        }
+        guard let ribbonFragment = library.makeFunction(name: "ribbon_fs_main") else {
+            throw LiquidOrbError.shaderFunctionMissing("ribbon_fs_main")
+        }
+        let ribbonDescriptor = MTLRenderPipelineDescriptor()
+        ribbonDescriptor.vertexFunction = ribbonVertex
+        ribbonDescriptor.fragmentFunction = ribbonFragment
+        ribbonDescriptor.colorAttachments[0].pixelFormat = view.colorPixelFormat
+        ribbonDescriptor.colorAttachments[0].isBlendingEnabled = true
+        ribbonDescriptor.colorAttachments[0].sourceRGBBlendFactor = .one
+        ribbonDescriptor.colorAttachments[0].destinationRGBBlendFactor = .one
+        ribbonDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
+        ribbonDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        ribbonPipeline = try device.makeRenderPipelineState(descriptor: ribbonDescriptor)
+        guard let ribbonCompositeFragment = library.makeFunction(
+            name: "ribbon_composite_fs_main"
+        ) else {
+            throw LiquidOrbError.shaderFunctionMissing("ribbon_composite_fs_main")
+        }
+        let ribbonCompositeDescriptor = MTLRenderPipelineDescriptor()
+        ribbonCompositeDescriptor.vertexFunction = vertex
+        ribbonCompositeDescriptor.fragmentFunction = ribbonCompositeFragment
+        ribbonCompositeDescriptor.colorAttachments[0].pixelFormat = view.colorPixelFormat
+        ribbonCompositeDescriptor.colorAttachments[0].isBlendingEnabled = true
+        ribbonCompositeDescriptor.colorAttachments[0].sourceRGBBlendFactor = .one
+        ribbonCompositeDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        ribbonCompositeDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
+        ribbonCompositeDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        ribbonCompositePipeline = try device.makeRenderPipelineState(
+            descriptor: ribbonCompositeDescriptor
+        )
         guard let queue = device.makeCommandQueue() else {
             throw LiquidOrbError.commandQueueUnavailable
         }
@@ -354,10 +527,14 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
         defer { stateLock.unlock() }
         guard state != currentState else { return }
 
+        let nextUniforms = orbUniformSeed(for: state)
         fromUniforms = sampleTransition(at: now)
-        targetUniforms = orbUniformSeed(for: state)
+        targetUniforms = nextUniforms
+        transitionTargetState = state
         transitionStartedAt = now
-        activeTransitionDuration = orbTransitionDuration
+        activeTransitionDuration = state == .thinking
+            ? orbActivationDuration
+            : orbSettleDuration
         currentState = state
     }
 
@@ -365,10 +542,14 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
         let rawProgress = activeTransitionDuration == 0
             ? 1
             : min(1, max(0, (now - transitionStartedAt) / activeTransitionDuration))
-        let progress = Float(rawProgress * rawProgress * (3 - 2 * rawProgress))
+        let easedProgress = transitionTargetState == .thinking
+            ? 1 - pow(1 - rawProgress, 3)
+            : rawProgress * rawProgress * (3 - 2 * rawProgress)
+        let progress = Float(easedProgress)
 
         for index in 3..<displayedUniforms.count {
-            let isColorComponent = index >= 32 && (index - 32) % 4 < 3
+            let isColorComponent = index >= ${orbColorOffset}
+                && (index - ${orbColorOffset}) % 4 < 3
             displayedUniforms[index] = isColorComponent
                 ? orbMixSrgb(fromUniforms[index], targetUniforms[index], progress)
                 : fromUniforms[index] + (targetUniforms[index] - fromUniforms[index]) * progress
@@ -376,7 +557,30 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
         return displayedUniforms
     }
 
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        ribbonTexture = nil
+    }
+
+    private func ensureRibbonTexture(for view: MTKView) -> MTLTexture? {
+        let width = max(1, Int(view.drawableSize.width))
+        let height = max(1, Int(view.drawableSize.height))
+        if let ribbonTexture,
+           ribbonTexture.width == width,
+           ribbonTexture.height == height {
+            return ribbonTexture
+        }
+        guard let device = view.device else { return nil }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: view.colorPixelFormat,
+            width: width,
+            height: height,
+            mipmapped: false
+        )
+        descriptor.usage = [.renderTarget, .shaderRead]
+        descriptor.storageMode = .private
+        ribbonTexture = device.makeTexture(descriptor: descriptor)
+        return ribbonTexture
+    }
 
     func draw(in view: MTKView) {
         guard
@@ -384,19 +588,54 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
             view.drawableSize.height > 0,
             let descriptor = view.currentRenderPassDescriptor,
             let drawable = view.currentDrawable,
-            let commandBuffer = commandQueue.makeCommandBuffer(),
-            let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor)
+            let commandBuffer = commandQueue.makeCommandBuffer()
         else { return }
 
+        let now = CACurrentMediaTime()
         stateLock.lock()
-        var uniforms = sampleTransition(at: CACurrentMediaTime())
+        var uniforms = sampleTransition(at: now)
         stateLock.unlock()
+        let frameDelta = min(0.1, max(0, now - lastFrameAt))
+        lastFrameAt = now
+        motionPhase += frameDelta * CFTimeInterval(max(uniforms[3], 0))
         uniforms[0] = Float(view.drawableSize.width)
         uniforms[1] = Float(view.drawableSize.height)
-        uniforms[2] = Float(CACurrentMediaTime() - startedAt)
-        encoder.setRenderPipelineState(pipeline)
+        uniforms[2] = Float(motionPhase / CFTimeInterval(max(uniforms[3], 0.001)))
+        let isParticleRibbon = round(uniforms[15]) == orbRibbonStyleIndex
+        if isParticleRibbon {
+            guard let ribbonTexture = ensureRibbonTexture(for: view) else { return }
+            let ribbonPass = MTLRenderPassDescriptor()
+            ribbonPass.colorAttachments[0].texture = ribbonTexture
+            ribbonPass.colorAttachments[0].loadAction = .clear
+            ribbonPass.colorAttachments[0].storeAction = .store
+            ribbonPass.colorAttachments[0].clearColor = MTLClearColor(
+                red: 0, green: 0, blue: 0, alpha: 0
+            )
+            guard let ribbonEncoder = commandBuffer.makeRenderCommandEncoder(
+                descriptor: ribbonPass
+            ) else { return }
+            ribbonEncoder.setRenderPipelineState(ribbonPipeline)
+            uniforms.withUnsafeBytes { bytes in
+                ribbonEncoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 0)
+                ribbonEncoder.setFragmentBytes(bytes.baseAddress!, length: bytes.count, index: 0)
+            }
+            ribbonEncoder.drawPrimitives(
+                type: .triangle,
+                vertexStart: 0,
+                vertexCount: 6,
+                instanceCount: orbRibbonInstanceCount
+            )
+            ribbonEncoder.endEncoding()
+        }
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else {
+            return
+        }
+        encoder.setRenderPipelineState(isParticleRibbon ? ribbonCompositePipeline : pipeline)
         uniforms.withUnsafeBytes { bytes in
             encoder.setFragmentBytes(bytes.baseAddress!, length: bytes.count, index: 0)
+        }
+        if isParticleRibbon {
+            encoder.setFragmentTexture(ribbonTexture, index: 0)
         }
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()

@@ -12,6 +12,10 @@ export const orbStateNumericKeys = [
   "metalEvolution",
   "metalRoughness",
   "metalDepth",
+  "ribbonWidth",
+  "ribbonTwist",
+  "ribbonFold",
+  "ribbonBreath",
   "zoom",
   "warp",
   "ridgeAmt",
@@ -44,16 +48,19 @@ export type OrbSharedParams = Omit<OrbParams, OrbStateProfileKey>;
 export type OrbStateConfiguration = {
   shared: OrbSharedParams;
   profiles: Record<OrbStateName, OrbStateProfile>;
+  activationDuration: number;
   transitionDuration: number;
 };
 
 export type OrbRenderTarget = {
   state: OrbStateName;
   params: OrbParams;
+  activationDuration: number;
   transitionDuration: number;
 };
 
 export const defaultOrbState: OrbStateName = "thinking";
+export const defaultOrbActivationDuration = 0.22;
 export const defaultOrbTransitionDuration = 0.65;
 
 type NumericTransform = {
@@ -63,109 +70,202 @@ type NumericTransform = {
 
 type IdleTransforms = Partial<Record<OrbStateNumericKey, NumericTransform>>;
 
-const idleTransformsByStyle: Record<StyleName, IdleTransforms> = {
+type IdleStyleProfile = {
+  numeric: IdleTransforms;
+  colors: Record<OrbStateColorKey, string>;
+};
+
+const idleProfilesByStyle: Record<StyleName, IdleStyleProfile> = {
   siri: {
-    speed: { scale: 0.52 },
-    contourDeform: { scale: 0.35 },
-    zoom: { scale: 0.9 },
-    warp: { scale: 0.72 },
-    ridgeAmt: { scale: 0.68 },
-    exposure: { scale: 0.84 },
+    numeric: {
+      speed: { scale: 0.3 },
+      contourDeform: { scale: 0.3 },
+      zoom: { scale: 0.94 },
+      warp: { scale: 0.52 },
+      ridgeAmt: { scale: 0.48 },
+      sharp: { scale: 0.9 },
+      exposure: { scale: 0.68 },
+    },
+    colors: {
+      colorA: "#B5A674", colorB: "#5E8794", colorC: "#9A648A",
+      colorD: "#635B8A", highlightColor: "#B6C4D2", glowColor: "#6C688F",
+    },
   },
   voiceWave: {
-    speed: { scale: 0.48 },
-    contourDeform: { scale: 0.4 },
-    zoom: { scale: 0.88 },
-    warp: { scale: 0.68 },
-    ridgeAmt: { scale: 0.62 },
-    exposure: { scale: 0.8 },
+    numeric: {
+      speed: { scale: 0.28 },
+      contourDeform: { scale: 0.3 },
+      zoom: { scale: 0.92 },
+      warp: { scale: 0.46 },
+      ridgeAmt: { scale: 0.42 },
+      exposure: { scale: 0.62 },
+    },
+    colors: {
+      colorA: "#08050B", colorB: "#6A2F69", colorC: "#8C4652",
+      colorD: "#55467F", highlightColor: "#B58AA5", glowColor: "#6C3E72",
+    },
   },
   blueDrop: {
-    speed: { scale: 0.5 },
-    contourDeform: { scale: 0.45 },
-    zoom: { scale: 0.88 },
-    warp: { scale: 0.7 },
-    ridgeAmt: { scale: 0.66 },
-    sharp: { scale: 0.88 },
-    exposure: { scale: 0.82 },
+    numeric: {
+      speed: { scale: 0.3 },
+      contourDeform: { scale: 0.35 },
+      zoom: { scale: 0.93 },
+      warp: { scale: 0.5 },
+      ridgeAmt: { scale: 0.46 },
+      sharp: { scale: 0.82 },
+      exposure: { scale: 0.66 },
+    },
+    colors: {
+      colorA: "#020812", colorB: "#0A2C5A", colorC: "#24678A",
+      colorD: "#A4C3CA", highlightColor: "#9FC8D5", glowColor: "#1F5076",
+    },
   },
   violetEmber: {
-    speed: { scale: 0.48 },
-    contourDeform: { scale: 0.4 },
-    zoom: { scale: 0.86 },
-    warp: { scale: 0.66 },
-    ridgeAmt: { scale: 0.62 },
-    sharp: { scale: 0.86 },
-    exposure: { scale: 0.8 },
+    numeric: {
+      speed: { scale: 0.28 },
+      contourDeform: { scale: 0.3 },
+      zoom: { scale: 0.92 },
+      warp: { scale: 0.46 },
+      ridgeAmt: { scale: 0.42 },
+      sharp: { scale: 0.78 },
+      exposure: { scale: 0.64 },
+    },
+    colors: {
+      colorA: "#0B0310", colorB: "#2B1748", colorC: "#593078",
+      colorD: "#9B78A8", highlightColor: "#BCA6C2", glowColor: "#593273",
+    },
   },
   refractiveBlob: {
-    speed: { scale: 0.5 },
-    contourDeform: { scale: 0.42 },
-    zoom: { scale: 0.9 },
-    warp: { scale: 0.67 },
-    ridgeAmt: { scale: 0.64 },
-    sharp: { scale: 0.88 },
-    exposure: { scale: 0.84 },
+    numeric: {
+      speed: { scale: 0.3 },
+      contourDeform: { scale: 0.32 },
+      zoom: { scale: 0.94 },
+      warp: { scale: 0.5 },
+      ridgeAmt: { scale: 0.44 },
+      sharp: { scale: 0.82 },
+      exposure: { scale: 0.68 },
+    },
+    colors: {
+      colorA: "#0F0B16", colorB: "#403552", colorC: "#776990",
+      colorD: "#AEA4BD", highlightColor: "#C9C4D1", glowColor: "#6E6185",
+    },
+  },
+  particleRibbon: {
+    numeric: {
+      speed: { scale: 0.28 },
+      ribbonWidth: { scale: 0.62 },
+      ribbonTwist: { scale: 0.42 },
+      ribbonFold: { scale: 0.35 },
+      ribbonBreath: { scale: 0.18 },
+      exposure: { scale: 0.68 },
+    },
+    colors: {
+      colorA: "#3A6068", colorB: "#375D78", colorC: "#594E83",
+      colorD: "#854C7A", highlightColor: "#B9CCD1", glowColor: "#514C78",
+    },
   },
   chromaticMetal: {
-    speed: { scale: 0.5 },
-    bandDensity: { scale: 0.72 },
-    chromaticShift: { scale: 0.62 },
-    metalStretch: { scale: 0.72 },
-    metalEvolution: { scale: 0.58 },
-    metalRoughness: { scale: 1.18 },
-    metalDepth: { scale: 0.76 },
-    exposure: { scale: 0.88 },
+    numeric: {
+      speed: { scale: 0.3 },
+      bandDensity: { scale: 0.62 },
+      chromaticShift: { scale: 0.35 },
+      metalStretch: { scale: 0.48 },
+      metalEvolution: { scale: 0.32 },
+      metalRoughness: { scale: 1.35 },
+      metalDepth: { scale: 0.55 },
+      exposure: { scale: 0.72 },
+    },
+    colors: {
+      colorA: "#B8BCBA", colorB: "#666B69", colorC: "#9EA3A1",
+      colorD: "#282B2D", highlightColor: "#D1D5D3", glowColor: "#78898F",
+    },
   },
   aurora: {
-    speed: { scale: 0.36 },
-    contourDeform: { scale: 0.35 },
-    zoom: { scale: 0.88 },
-    warp: { scale: 0.66 },
-    ridgeAmt: { scale: 0.6 },
-    exposure: { scale: 0.82 },
+    numeric: {
+      speed: { scale: 0.22 },
+      contourDeform: { scale: 0.3 },
+      zoom: { scale: 0.92 },
+      warp: { scale: 0.42 },
+      ridgeAmt: { scale: 0.38 },
+      sharp: { scale: 0.85 },
+      exposure: { scale: 0.62 },
+    },
+    colors: {
+      colorA: "#02050C", colorB: "#1D6659", colorC: "#285D78",
+      colorD: "#533E75", highlightColor: "#92B6B3", glowColor: "#286A62",
+    },
   },
   frost: {
-    speed: { scale: 0.42 },
-    contourDeform: { scale: 0.35 },
-    zoom: { scale: 0.9 },
-    warp: { scale: 0.68 },
-    ridgeAmt: { scale: 0.62 },
-    sharp: { scale: 0.86 },
-    exposure: { scale: 0.86 },
+    numeric: {
+      speed: { scale: 0.26 },
+      contourDeform: { scale: 0.28 },
+      zoom: { scale: 0.94 },
+      warp: { scale: 0.5 },
+      ridgeAmt: { scale: 0.46 },
+      sharp: { scale: 0.78 },
+      exposure: { scale: 0.72 },
+    },
+    colors: {
+      colorA: "#C3CDD5", colorB: "#9AABB8", colorC: "#768D9E",
+      colorD: "#536985", highlightColor: "#D6DEE5", glowColor: "#697D91",
+    },
   },
   chrome: {
-    speed: { scale: 0.42 },
-    contourDeform: { scale: 0.4 },
-    zoom: { scale: 0.88 },
-    warp: { scale: 0.66 },
-    sharp: { scale: 0.84 },
-    exposure: { scale: 0.86 },
+    numeric: {
+      speed: { scale: 0.28 },
+      contourDeform: { scale: 0.35 },
+      zoom: { scale: 0.92 },
+      warp: { scale: 0.48 },
+      sharp: { scale: 0.74 },
+      exposure: { scale: 0.72 },
+    },
+    colors: {
+      colorA: "#A7AAA9", colorB: "#6E7273", colorC: "#363A3D",
+      colorD: "#101213", highlightColor: "#CBCFCE", glowColor: "#747A7B",
+    },
   },
   opal: {
-    speed: { scale: 0.46 },
-    contourDeform: { scale: 0.4 },
-    zoom: { scale: 0.9 },
-    warp: { scale: 0.7 },
-    ridgeAmt: { scale: 0.65 },
-    exposure: { scale: 0.84 },
+    numeric: {
+      speed: { scale: 0.3 },
+      contourDeform: { scale: 0.32 },
+      zoom: { scale: 0.94 },
+      warp: { scale: 0.52 },
+      ridgeAmt: { scale: 0.48 },
+      exposure: { scale: 0.68 },
+    },
+    colors: {
+      colorA: "#C9C3BC", colorB: "#6E9E91", colorC: "#A17496",
+      colorD: "#68608E", highlightColor: "#E1DCD5", glowColor: "#82799B",
+    },
   },
   spectrum: {
-    speed: { scale: 0.44 },
-    contourDeform: { scale: 0.38 },
-    zoom: { scale: 0.88 },
-    warp: { scale: 0.65 },
-    ridgeAmt: { scale: 0.58 },
-    exposure: { scale: 0.8 },
+    numeric: {
+      speed: { scale: 0.27 },
+      contourDeform: { scale: 0.3 },
+      zoom: { scale: 0.92 },
+      warp: { scale: 0.44 },
+      ridgeAmt: { scale: 0.38 },
+      exposure: { scale: 0.62 },
+    },
+    colors: {
+      colorA: "#B4BBC2", colorB: "#285D8F", colorC: "#91506F",
+      colorD: "#3F8873", highlightColor: "#D8DDE1", glowColor: "#386789",
+    },
   },
   plasma: {
-    speed: { scale: 0.44 },
-    contourDeform: { scale: 0.36 },
-    zoom: { scale: 0.86 },
-    warp: { scale: 0.64 },
-    ridgeAmt: { scale: 0.56 },
-    sharp: { scale: 0.82 },
-    exposure: { scale: 0.8 },
+    numeric: {
+      speed: { scale: 0.26 },
+      contourDeform: { scale: 0.28 },
+      zoom: { scale: 0.9 },
+      warp: { scale: 0.42 },
+      ridgeAmt: { scale: 0.36 },
+      sharp: { scale: 0.68 },
+      exposure: { scale: 0.6 },
+    },
+    colors: {
+      colorA: "#04020A", colorB: "#084772", colorC: "#1C5790",
+      colorD: "#174B84", highlightColor: "#A5BBD0", glowColor: "#14577F",
+    },
   },
 };
 
@@ -193,13 +293,14 @@ export function splitOrbParams(params: OrbParams): {
 
 function createIdleParams(thinkingParams: OrbParams): OrbParams {
   const idleParams = { ...thinkingParams };
-  const transforms = idleTransformsByStyle[thinkingParams.style];
+  const profile = idleProfilesByStyle[thinkingParams.style];
 
-  for (const [key, transform] of Object.entries(transforms) as Array<
+  for (const [key, transform] of Object.entries(profile.numeric) as Array<
     [OrbStateNumericKey, NumericTransform]
   >) {
     idleParams[key] = thinkingParams[key] * transform.scale + (transform.offset ?? 0);
   }
+  for (const key of orbStateColorKeys) idleParams[key] = profile.colors[key];
 
   return idleParams;
 }
@@ -207,15 +308,20 @@ function createIdleParams(thinkingParams: OrbParams): OrbParams {
 export function createOrbStateConfiguration(
   thinkingParams: OrbParams,
   transitionDuration = defaultOrbTransitionDuration,
+  activationDuration = defaultOrbActivationDuration,
 ): OrbStateConfiguration {
   if (!Number.isFinite(transitionDuration) || transitionDuration < 0) {
     throw new RangeError(`Invalid orb transition duration: ${transitionDuration}`);
+  }
+  if (!Number.isFinite(activationDuration) || activationDuration < 0) {
+    throw new RangeError(`Invalid orb activation duration: ${activationDuration}`);
   }
 
   const thinking = splitOrbParams(thinkingParams);
   const idle = splitOrbParams(createIdleParams(thinkingParams));
 
   return {
+    activationDuration,
     shared: thinking.shared,
     profiles: {
       idle: idle.profile,
@@ -311,6 +417,11 @@ export function smoothOrbTransitionProgress(progress: number): number {
   return clamped * clamped * (3 - 2 * clamped);
 }
 
+export function activeOrbTransitionProgress(progress: number): number {
+  const clamped = Math.min(1, Math.max(0, progress));
+  return 1 - (1 - clamped) ** 3;
+}
+
 export function interpolateOrbParams(
   from: OrbParams,
   to: OrbParams,
@@ -336,23 +447,34 @@ export function createOrbTransitionController(initialTarget: OrbRenderTarget): {
   let state = initialTarget.state;
   let fromParams = { ...initialTarget.params };
   let targetParams = { ...initialTarget.params };
+  let targetState = initialTarget.state;
   let startedAtMs = 0;
   let durationMs = 0;
 
   function currentParams(nowMs: number): OrbParams {
     if (durationMs === 0) return { ...targetParams };
     const elapsed = Math.max(0, nowMs - startedAtMs);
-    const progress = smoothOrbTransitionProgress(elapsed / durationMs);
+    const rawProgress = elapsed / durationMs;
+    const progress = targetState === "thinking"
+      ? activeOrbTransitionProgress(rawProgress)
+      : smoothOrbTransitionProgress(rawProgress);
     return interpolateOrbParams(fromParams, targetParams, progress);
   }
 
   return {
     sample(nextTarget, nowMs) {
       if (nextTarget.state !== state) {
-        fromParams = currentParams(nowMs);
+        const current = currentParams(nowMs);
+        fromParams = current;
         targetParams = { ...nextTarget.params };
+        targetState = nextTarget.state;
         startedAtMs = nowMs;
-        durationMs = Math.max(0, nextTarget.transitionDuration * 1000);
+        durationMs = Math.max(
+          0,
+          (nextTarget.state === "thinking"
+            ? nextTarget.activationDuration
+            : nextTarget.transitionDuration) * 1000,
+        );
         state = nextTarget.state;
       } else {
         targetParams = { ...nextTarget.params };
