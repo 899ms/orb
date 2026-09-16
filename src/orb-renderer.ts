@@ -6,10 +6,12 @@ import {
 } from "./orb-states";
 import { orbUniformFloatCount, writeOrbUniforms } from "./orb-uniforms";
 import { orbShaderSource } from "./shader-source";
+import { applyAudioUniforms, type AudioBands } from "./orb-audio";
 
 export type OrbRendererOptions = {
   canvas: HTMLCanvasElement;
   getTarget: () => OrbRenderTarget;
+  getAudioBands?: (dt: number) => AudioBands;
   onError: (error: Error) => void;
   onReady: () => void;
 };
@@ -17,6 +19,7 @@ export type OrbRendererOptions = {
 export function createOrbRenderer({
   canvas,
   getTarget,
+  getAudioBands,
   onError,
   onReady,
 }: OrbRendererOptions): () => void {
@@ -225,15 +228,16 @@ export function createOrbRenderer({
           ? 0
           : Math.min(0.1, Math.max(0, (now - lastFrameAt) / 1000));
         lastFrameAt = now;
-        motionPhase += frameDelta * Math.max(params.speed, 0);
-        const shaderTime = motionPhase / Math.max(params.speed, 0.001);
         writeOrbUniforms(
           values,
           canvas.width,
           canvas.height,
-          shaderTime,
+          0,
           params,
         );
+        if (getAudioBands) applyAudioUniforms(values, getAudioBands(frameDelta));
+        motionPhase += frameDelta * Math.max(values[3], 0);
+        values[2] = motionPhase / Math.max(values[3], 0.001);
         device.queue.writeBuffer(uniformBuffer, 0, values);
 
         const isParticleRibbon =

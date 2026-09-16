@@ -474,7 +474,7 @@ try {
 
   assert.match(
     rendererSource,
-    /motionPhase \+= frameDelta \* Math\.max\(params\.speed, 0\)[\s\S]*?shaderTime = motionPhase \/ Math\.max\(params\.speed, 0\.001\)/,
+    /motionPhase \+= frameDelta \* Math\.max\(values\[3\], 0\)[\s\S]*?values\[2\] = motionPhase \/ Math\.max\(values\[3\], 0\.001\)/,
     "编辑器状态切换没有保持运动相位连续",
   );
 

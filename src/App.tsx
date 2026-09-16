@@ -54,6 +54,8 @@ import {
   type NumericKey,
 } from "./editor-i18n";
 import { createOrbRenderer } from "./orb-renderer";
+import { OrbAudioInput } from "./orb-audio";
+import { AudioControls } from "./AudioControls";
 import {
   createOrbStateConfiguration,
   createPresetOrbStateConfiguration,
@@ -525,6 +527,8 @@ function useStackedLayout(): boolean {
 }
 
 export function App(): React.JSX.Element {
+  const [audioInput] = React.useState(() => new OrbAudioInput());
+  const [audioResetKey, setAudioResetKey] = React.useState(0);
   const [locale, setLocale] = React.useState<Locale>(readInitialLocale);
   const [editorState, setEditorState] = React.useState<OrbEditorState>(readEditorStateFromHash);
   const [renderState, setRenderState] = React.useState<"loading" | "ready" | "error">("loading");
@@ -637,6 +641,7 @@ export function App(): React.JSX.Element {
     return createOrbRenderer({
       canvas,
       getTarget: () => renderTargetRef.current,
+      getAudioBands: (dt) => audioInput.read(dt),
       onError: (error) => {
         setErrorMessage(error.message);
         setRenderState("error");
@@ -700,6 +705,7 @@ export function App(): React.JSX.Element {
   }, []);
 
   const resetAll = React.useCallback(() => {
+    setAudioResetKey((value) => value + 1);
     setEditorState({
       activeState: defaultOrbState,
       configuration: createPresetOrbStateConfiguration(effectDefaults.style),
@@ -981,6 +987,7 @@ export function App(): React.JSX.Element {
             resetLabel={copy.resetControls}
             title={copy.orbControls}
           >
+            <AudioControls key={audioResetKey} input={audioInput} style={params.style} locale={locale} />
             {previewMode === "scene" ? (
               <PanelSection
                 collapsed={sectionState.isCollapsed("scene")}

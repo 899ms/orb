@@ -721,3 +721,12 @@ input {
     animation: none;
   }
 }
+/* Audio controls share the existing property panel and never cover the orb. */
+.orb-audio-controls { display: grid; gap: 10px; min-width: 0; }
+.orb-audio-hint { font-size: 12px; line-height: 1.5; opacity: .7; margin: 0; }
+.orb-audio-hint:empty { display: none; }
+.orb-audio-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.orb-audio-gain { display: grid; grid-template-columns: 1fr auto; gap: 8px; font-size: 12px; }
+.orb-audio-gain input { grid-column: 1 / -1; width: 100%; accent-color: #a99aff; }
+.orb-audio-controls meter { width: 100%; height: 6px; }
+.orb-audio-player audio { width: 100%; height: 36px; }

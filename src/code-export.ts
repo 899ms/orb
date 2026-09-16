@@ -8,6 +8,7 @@ import {
   type OrbStateName,
 } from "./orb-states";
 import { orbShaderSource } from "./shader-source";
+import { audioRules, audioFlowStrengths } from "./orb-audio";
 
 function formatSwiftFloats(values: number[]): string {
   const rows: string[] = [];
@@ -70,6 +71,24 @@ export function createWebExport(
     let activeTransitionDuration = 0;
     let lastFrameAt = null;
     let motionPhase = 0;
+    const audioRules = ${JSON.stringify(audioRules)};
+    const audioFlowStrengths = ${JSON.stringify(audioFlowStrengths)};
+    function applyAudioUniforms(values, bands) {
+      const strength = audioFlowStrengths[Math.round(values[15])] ?? 0;
+      if (!strength) return;
+      for (const [index, band, additive, proportional, ceiling] of audioRules) {
+        const input = bands[band];
+        const level = (Number.isFinite(input) ? Math.max(0, Math.min(1, input)) : 0) * strength;
+        if (!level) continue;
+        values[index] = Math.min(Math.max(ceiling, values[index]), values[index] * (1 + proportional * level) + additive * level);
+      }
+    }
+    let audioBands = { low: 0, mid: 0, high: 0, all: 0 };
+    // Feed normalized 0...1 bands from your audio analyser; zero them on stop.
+    function setAudioBands(bands = {}) {
+      audioBands = Object.fromEntries(["low", "mid", "high", "all"].map(key => [key,
+        Number.isFinite(bands[key]) ? Math.max(0, Math.min(1, bands[key])) : 0]));
+    }
 
     function srgbToLinear(value) {
       return value <= 0.04045
@@ -131,6 +150,7 @@ export function createWebExport(
       value: Object.freeze({
         getState: () => state,
         setState,
+        setAudioBands,
       }),
     });
 
@@ -276,6 +296,7 @@ export function createWebExport(
             ? 0
             : Math.min(0.1, Math.max(0, (now - lastFrameAt) / 1000));
           lastFrameAt = now;
+          applyAudioUniforms(values, audioBands);
           motionPhase += frameDelta * Math.max(values[3], 0);
           values[0] = width;
           values[1] = height;
@@ -382,6 +403,24 @@ private let orbSettleDuration: CFTimeInterval = ${configuration.transitionDurati
 private let orbRibbonStyleIndex: Float = ${styleFlowIndexes.particleRibbon}
 private let orbRibbonInstanceCount = ${particleRibbonInstanceCount}
 
+// Supply normalized, smoothed frequency bands from your app's audio analyser.
+public struct LiquidOrbAudio: Sendable {
+    public var low: Float
+    public var mid: Float
+    public var high: Float
+    public var all: Float
+    public init(low: Float = 0, mid: Float = 0, high: Float = 0, all: Float = 0) {
+        self.low = low; self.mid = mid; self.high = high; self.all = all
+    }
+}
+
+private func applyOrbAudio(_ values: inout [Float], _ bands: LiquidOrbAudio) {
+    let strengths: [Int: Float] = [${Object.entries(audioFlowStrengths).map(([key, value]) => `${key}: ${value}`).join(", ")}]
+    guard let strength = strengths[Int(values[15].rounded())] else { return }
+    func level(_ value: Float) -> Float { value.isFinite ? max(0, min(1, value)) * strength : 0 }
+${audioRules.map(([index, band, additive, proportional, ceiling]) => `    if level(bands.${band}) > 0 { values[${index}] = min(max(${ceiling}, values[${index}]), values[${index}] * (1 + ${proportional} * level(bands.${band})) + ${additive} * level(bands.${band})) }`).join("\n")}
+}
+
 public enum LiquidOrbState: Sendable {
     case idle
     case thinking
@@ -426,6 +465,13 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
     private var ribbonTexture: MTLTexture?
     private var lastFrameAt = CACurrentMediaTime()
     private var motionPhase: CFTimeInterval = 0
+    private var audio = LiquidOrbAudio()
+
+    func setAudio(_ audio: LiquidOrbAudio) {
+        stateLock.lock()
+        self.audio = audio
+        stateLock.unlock()
+    }
     private let stateLock = NSLock()
     private var currentState: LiquidOrbState
     private var transitionTargetState: LiquidOrbState
@@ -594,6 +640,7 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
         let now = CACurrentMediaTime()
         stateLock.lock()
         var uniforms = sampleTransition(at: now)
+        applyOrbAudio(&uniforms, audio)
         stateLock.unlock()
         let frameDelta = min(0.1, max(0, now - lastFrameAt))
         lastFrameAt = now
@@ -647,6 +694,8 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
 private final class LiquidOrbCoordinator {
     private var renderer: LiquidOrbRenderer?
 
+    func setAudio(_ audio: LiquidOrbAudio) { renderer?.setAudio(audio) }
+
     func makeView(state: LiquidOrbState) -> MTKView {
         let view = MTKView(frame: .zero, device: nil)
         do {
@@ -667,30 +716,38 @@ private final class LiquidOrbCoordinator {
 #if os(iOS)
 private struct LiquidOrbSurface: UIViewRepresentable {
     let state: LiquidOrbState
+    var audio = LiquidOrbAudio()
 
     func makeCoordinator() -> LiquidOrbCoordinator { LiquidOrbCoordinator() }
     func makeUIView(context: Context) -> MTKView { context.coordinator.makeView(state: state) }
-    func updateUIView(_ view: MTKView, context: Context) { context.coordinator.setState(state) }
+    func updateUIView(_ view: MTKView, context: Context) { context.coordinator.setState(state); context.coordinator.setAudio(audio) }
 }
 #elseif os(macOS)
 private struct LiquidOrbSurface: NSViewRepresentable {
     let state: LiquidOrbState
+    var audio = LiquidOrbAudio()
 
     func makeCoordinator() -> LiquidOrbCoordinator { LiquidOrbCoordinator() }
     func makeNSView(context: Context) -> MTKView { context.coordinator.makeView(state: state) }
-    func updateNSView(_ view: MTKView, context: Context) { context.coordinator.setState(state) }
+    func updateNSView(_ view: MTKView, context: Context) { context.coordinator.setState(state); context.coordinator.setAudio(audio) }
 }
 #endif
 
 public struct LiquidOrbView: View {
     private let state: LiquidOrbState
+    private var audio = LiquidOrbAudio()
 
     public init(state: LiquidOrbState = .${initialState}) {
         self.state = state
     }
 
+    public init(state: LiquidOrbState = .${initialState}, audio: LiquidOrbAudio) {
+        self.state = state
+        self.audio = audio
+    }
+
     public var body: some View {
-        LiquidOrbSurface(state: state)
+        LiquidOrbSurface(state: state, audio: audio)
     }
 }`;
 }
